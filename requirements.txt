@@ -1,0 +1,6 @@
+gradio>=4.0.0
+joblib
+numpy
+scikit-learn
+xgboost
+tensorflow>=2.13.0
