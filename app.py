@@ -1,7 +1,7 @@
 """
 HydroNail ML API - Complete Water Treatment AI System
 Smart India Hackathon 2025 | Team Nova_Minds
-All 3 ML Models with Full Features
+All 4 ML Models with Full Features
 """
 
 import gradio as gr
@@ -46,6 +46,21 @@ except Exception as e:
     print(f"⚠️ Equipment model error: {e}")
     equipment_model = None
 
+# Model 4: Treatment Process Controller
+try:
+    tpc_model = load_model('treatment_process_controller.h5')
+    tpc_input_scaler = joblib.load('tpc_input_scaler.pkl')
+    tpc_output_scaler = joblib.load('tpc_output_scaler.pkl')
+    
+    with open('tpc_metadata.json', 'r') as f:
+        tpc_metadata = json.load(f)
+    
+    print("✅ Treatment Process Controller loaded (DNN - 25 outputs)")
+except Exception as e:
+    print(f"⚠️ Treatment controller error: {e}")
+    tpc_model = None
+    tpc_metadata = None
+
 print("="*60)
 print("🎉 HydroNail ML System Ready!")
 print("="*60)
@@ -64,14 +79,11 @@ def predict_water_quality(pH, turbidity, temperature, dissolved_oxygen,
     if water_quality_model is None:
         return """
 # ❌ Model Not Available
-
 The water quality prediction model is currently loading or unavailable.
-
 **Please check:**
 - Model files uploaded correctly
 - No file corruption during upload
 - Sufficient memory available
-
 **Contact:** Team Nova_Minds
 """
     
@@ -762,23 +774,135 @@ The LSTM equipment failure prediction model is currently loading.
 """
 
 
+def predict_treatment_process(pH, turbidity, temperature, dissolved_oxygen, 
+                              tds, conductivity, chlorine, hardness,
+                              flow_rate, tank1_level, tank2_level, tank3_level,
+                              hour_of_day, prev_stage, water_source):
+    """Model 4: Treatment Process Controller"""
+    
+    if tpc_model is None:
+        return "❌ Error: Treatment Process Controller not loaded"
+    
+    try:
+        # Prepare input
+        input_data = np.array([[
+            pH, turbidity, temperature, dissolved_oxygen,
+            tds, conductivity, chlorine, hardness,
+            flow_rate, tank1_level, tank2_level, tank3_level,
+            hour_of_day, prev_stage, water_source
+        ]])
+        
+        # Scale
+        input_scaled = tpc_input_scaler.transform(input_data)
+        
+        # Predict
+        prediction = tpc_model.predict(input_scaled, verbose=0)[0]
+        
+        # Parse
+        binary_cols = tpc_metadata['binary_outputs']
+        binary_outputs = prediction[:len(binary_cols)]
+        continuous_outputs = prediction[len(binary_cols):]
+        continuous_outputs = tpc_output_scaler.inverse_transform([continuous_outputs])[0]
+        
+        # Format output
+        output = f"""
+# 🏭 Treatment Process Control Plan
+
+## 📊 Input Summary
+- **Flow Rate:** {flow_rate:.0f} m³/hr | **Time:** {int(hour_of_day)}:00
+- **Tank Levels:** T1={tank1_level:.0f}% | T2={tank2_level:.0f}% | T3={tank3_level:.0f}%
+
+---
+
+## 🔵 PRIMARY TREATMENT
+
+**Equipment:**
+- Coarse Screen: {'🟢 ON' if binary_outputs[0] > 0.5 else '🔴 OFF'}
+- Fine Screen: {'🟢 ON' if binary_outputs[1] > 0.5 else '🔴 OFF'}
+
+**Settings:**
+- Coagulant Pump: **{continuous_outputs[2]:.1f}%**
+- Polymer Pump: **{continuous_outputs[3]:.2f}%**
+- Flash Mixer: **{continuous_outputs[4]:.0f} RPM**
+- Settling Time: **{continuous_outputs[1]:.1f} hrs**
+
+---
+
+## 🟡 SECONDARY TREATMENT
+
+**Aeration:**
+- Blower 1: {'🟢 ON' if binary_outputs[2] > 0.5 else '🔴 OFF'}
+- Blower 2: {'🟢 ON' if binary_outputs[3] > 0.5 else '🔴 OFF'}
+- Blower 3: {'🟢 ON' if binary_outputs[4] > 0.5 else '🔴 OFF'}
+- Air Flow: **{continuous_outputs[6]:.2f} m³/min**
+
+**Process:**
+- Sludge Recirculation: **{continuous_outputs[7]:.1f}%**
+- Waste Sludge Pump: {'🟢 ON' if binary_outputs[6] > 0.5 else '🔴 OFF'}
+
+---
+
+## 🟢 TERTIARY TREATMENT
+
+**Filtration:**
+- Sand Filter 1: {'🟢 ON' if binary_outputs[7] > 0.5 else '🔴 OFF'}
+- Sand Filter 2: {'🟢 ON' if binary_outputs[8] > 0.5 else '🔴 OFF'}
+- Carbon Filter: {'🟢 ON' if binary_outputs[9] > 0.5 else '🔴 OFF'}
+
+**Disinfection:**
+- UV Intensity: **{continuous_outputs[8]:.1f}%**
+- Chlorine Pump: **{continuous_outputs[9]:.1f}%**
+
+---
+
+## 💰 OPTIMIZATION METRICS
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Power Consumption | **{continuous_outputs[11]:.0f} kWh** | {'🟢 Efficient' if continuous_outputs[11] < 200 else '🟡 High'} |
+| Treatment Time | **{continuous_outputs[12]:.1f} hours** | {'🟢 Fast' if continuous_outputs[12] < 8 else '🟡 Slow'} |
+| Total Cost | **₹{continuous_outputs[13]:.0f}** | {'🟢 Low' if continuous_outputs[13] < 500 else '🟡 Medium'} |
+| Final Quality | **{continuous_outputs[14]:.1f}%** | {'🟢 Excellent' if continuous_outputs[14] > 90 else '🟡 Good'} |
+
+---
+
+## 📋 RECOMMENDATIONS
+
+"""
+        
+        # Add recommendations
+        if binary_outputs[2] + binary_outputs[3] + binary_outputs[4] >= 2:
+            output += "- ⚡ High aeration mode active for low DO\n"
+        
+        if continuous_outputs[2] > 70:
+            output += "- 💊 Heavy coagulant dosing - monitor for efficiency\n"
+        
+        if continuous_outputs[14] > 95:
+            output += "- ✅ Excellent quality expected with current settings\n"
+        
+        if continuous_outputs[11] > 250:
+            output += "- ⚠️ High power consumption - consider load optimization\n"
+        
+        output += "\n---\n\n*AI-powered treatment optimization | Neural Network Model*"
+        
+        return output
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
 # ============================================================
 # GRADIO INTERFACE - PROFESSIONAL MULTI-TAB LAYOUT
 # ============================================================
 
-# Remove custom_css variable completely
-# Just use plain gr.Blocks()
-
 with gr.Blocks(title="HydroNail ML API") as demo:
-
-
     
     gr.Markdown("""
     # 🌊 HydroNail - AI-Powered Water Treatment Platform
     
     ### Smart India Hackathon 2025 | Team Nova_Minds | Problem ID: SIH25259
     
-    **Complete ML System:** Water Quality Prediction • Chemical Dosing Optimization • Equipment Failure Prediction
+    **Complete ML System:** Water Quality • Chemical Dosing • Equipment Health • Treatment Control
     
     ---
     """)
@@ -929,6 +1053,54 @@ with gr.Blocks(title="HydroNail ML API") as demo:
                 inputs=[eq_vibration, eq_temp, eq_pressure, eq_current, eq_runtime],
                 label="Equipment Health Scenarios"
             )
+        
+        # ==================== TAB 4: TREATMENT CONTROLLER (NEW) ====================
+        with gr.Tab("🏭 Treatment Control"):
+            gr.Markdown("""
+            ### AI-Powered Plant Operations Controller
+            **Deep Neural Network | 25 Output Parameters | Real-Time Equipment Control**
+            
+            Get optimal equipment settings based on current water quality and plant status.
+            """)
+            
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("#### Water Quality Inputs")
+                    tpc_ph = gr.Slider(0, 14, value=7.0, step=0.1, label="pH")
+                    tpc_turb = gr.Number(value=45, label="Turbidity (NTU)")
+                    tpc_temp = gr.Slider(15, 40, value=28, label="Temperature (°C)")
+                    tpc_do = gr.Slider(0, 15, value=5.5, label="DO (mg/L)")
+                    tpc_tds = gr.Number(value=420, label="TDS (ppm)")
+                    tpc_cond = gr.Number(value=600, label="Conductivity (µS/cm)")
+                    tpc_cl = gr.Slider(0, 5, value=0.8, label="Chlorine (mg/L)")
+                    tpc_hard = gr.Number(value=180, label="Hardness (mg/L)")
+                
+                with gr.Column():
+                    gr.Markdown("#### Plant Status Inputs")
+                    tpc_flow = gr.Slider(500, 2000, value=1200, step=50, label="Flow Rate (m³/hr)")
+                    tpc_t1 = gr.Slider(0, 100, value=75, label="Tank 1 Level (%)")
+                    tpc_t2 = gr.Slider(0, 100, value=60, label="Tank 2 Level (%)")
+                    tpc_t3 = gr.Slider(0, 100, value=80, label="Tank 3 Level (%)")
+                    tpc_hour = gr.Slider(0, 23, value=14, step=1, label="Hour (0-23)")
+                    tpc_stage = gr.Slider(0, 3, value=0, step=1, label="Prev Stage (0-3)")
+                    tpc_source = gr.Slider(0, 2, value=2, step=1, label="Source (0=River, 1=Ground, 2=Industrial)")
+            
+            tpc_btn = gr.Button("🎛️ Generate Treatment Plan")
+            tpc_out = gr.Markdown()
+            
+            tpc_btn.click(
+                fn=predict_treatment_process,
+                inputs=[tpc_ph, tpc_turb, tpc_temp, tpc_do, tpc_tds, tpc_cond, tpc_cl, tpc_hard,
+                       tpc_flow, tpc_t1, tpc_t2, tpc_t3, tpc_hour, tpc_stage, tpc_source],
+                outputs=tpc_out
+            )
+            
+            gr.Examples(
+                [[6.2, 55, 30, 3.8, 580, 850, 0.3, 320, 1500, 65, 55, 70, 10, 0, 2],
+                 [7.5, 20, 26, 7.2, 320, 480, 1.2, 160, 800, 80, 75, 85, 14, 1, 1]],
+                inputs=[tpc_ph, tpc_turb, tpc_temp, tpc_do, tpc_tds, tpc_cond, tpc_cl, tpc_hard,
+                       tpc_flow, tpc_t1, tpc_t2, tpc_t3, tpc_hour, tpc_stage, tpc_source]
+            )
     
     # Footer
     gr.Markdown("""
@@ -941,6 +1113,7 @@ with gr.Blocks(title="HydroNail ML API") as demo:
     | **Water Quality Prediction** | 96.31% accuracy (XGBoost) | Real-time quality monitoring |
     | **Chemical Dosing Optimization** | R² > 0.98 (Random Forest) | 25-30% cost reduction |
     | **Equipment Failure Prediction** | 97.44% accuracy (LSTM) | Prevent costly downtime |
+    | **Treatment Process Control** | 25 parameters (Deep NN) | Automated plant operations |
     | **Response Time** | < 100ms per prediction | Instant decision support |
     | **Scalability** | 10,000+ concurrent users | Enterprise-grade platform |
     | **Compliance** | BIS 10500:2012, WHO standards | 100% regulatory adherence |
@@ -953,6 +1126,7 @@ with gr.Blocks(title="HydroNail ML API") as demo:
     - ✅ **Cost Savings:** 25% reduction in chemical usage
     - ✅ **Maintenance:** 30-40% reduction in equipment failures
     - ✅ **Efficiency:** 15-20% improvement in treatment efficiency
+    - ✅ **Automation:** Complete plant control optimization
     - ✅ **ROI:** 1-1.5 year payback period
     
     ---
@@ -961,7 +1135,7 @@ with gr.Blocks(title="HydroNail ML API") as demo:
     Smart India Hackathon 2025 | Problem ID: SIH25259  
     Theme: Clean & Green Technology | Category: Software
     
-    *Powered by XGBoost, Random Forest, and LSTM Deep Learning*
+    *Powered by XGBoost, Random Forest, LSTM, and Deep Neural Networks*
     """)
 
 # Launch the application
@@ -972,5 +1146,3 @@ if __name__ == "__main__":
         server_port=7860,
         show_error=True  # Display detailed errors for debugging
     )
-
-        
