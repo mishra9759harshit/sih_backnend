@@ -777,7 +777,8 @@ custom_css = """
 }
 """
 
-with gr.Blocks(theme=gr.themes.Soft(), css=custom_css, title="HydroNail ML API") as demo:
+with gr.Blocks(css=custom_css, title="HydroNail ML API") as demo:
+
     
     gr.Markdown("""
     # 🌊 HydroNail - AI-Powered Water Treatment Platform
