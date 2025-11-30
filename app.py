@@ -766,18 +766,11 @@ The LSTM equipment failure prediction model is currently loading.
 # GRADIO INTERFACE - PROFESSIONAL MULTI-TAB LAYOUT
 # ============================================================
 
-# Custom CSS for better styling
-custom_css = """
-.gradio-container {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
-.gr-button-primary {
-    background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
-    border: none !important;
-}
-"""
+# Remove custom_css variable completely
+# Just use plain gr.Blocks()
 
-with gr.Blocks(css=custom_css, title="HydroNail ML API") as demo:
+with gr.Blocks(title="HydroNail ML API") as demo:
+
 
     
     gr.Markdown("""
