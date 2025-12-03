@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Water Treatment Plant - Real-Time Equipment Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 30px;
+            margin-top: 15px;
+            font-size: 0.95em;
+            flex-wrap: wrap;
+        }
+
+        .status-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        .machine-card {
+            background: rgba(255, 255, 255, 0.95);
+            color: #333;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .machine-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .machine-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .machine-card.critical::before {
+            background: #dc3545;
+        }
+
+        .machine-card.warning::before {
+            background: #ffc107;
+        }
+
+        .machine-card.normal::before {
+            background: #28a745;
+        }
+
+        .machine-card.loading {
+            opacity: 0.6;
+        }
+
+        .machine-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .machine-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .machine-id {
+            font-size: 0.85em;
+            color: #7f8c8d;
+            margin-top: 3px;
+        }
+
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .status-running {
+            background: #28a745;
+            color: white;
+        }
+
+        .status-stopped {
+            background: #6c757d;
+            color: white;
+        }
+
+        .status-maintenance {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .health-score {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .health-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 2em;
+            font-weight: bold;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            position: relative;
+        }
+
+        .health-circle::after {
+            content: 'Health Score';
+            position: absolute;
+            bottom: -25px;
+            font-size: 0.4em;
+            color: #7f8c8d;
+            font-weight: normal;
+        }
+
+        .health-excellent {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+
+        .health-good {
+            background: linear-gradient(135deg, #20c997, #17a2b8);
+            color: white;
+        }
+
+        .health-fair {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+            color: white;
+        }
+
+        .health-poor {
+            background: linear-gradient(135deg, #fd7e14, #dc3545);
+            color: white;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .metric {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 8px;
+            border-left: 3px solid #667eea;
+        }
+
+        .metric-label {
+            font-size: 0.75em;
+            color: #6c757d;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .metric-value {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .metric-status {
+            font-size: 0.7em;
+            margin-top: 3px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .status-normal { background: #d4edda; color: #155724; }
+        .status-warning { background: #fff3cd; color: #856404; }
+        .status-critical { background: #f8d7da; color: #721c24; }
+
+        .alerts {
+            margin-top: 15px;
+        }
+
+        .alert-item {
+            background: #fff3cd;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 0.85em;
+            border-left: 3px solid #ffc107;
+        }
+
+        .alert-critical {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+
+        .prediction-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .prediction-title {
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            opacity: 0.9;
+        }
+
+        .prediction-value {
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+
+        .prediction-details {
+            margin-top: 8px;
+            font-size: 0.85em;
+        }
+
+        .prediction-action {
+            margin-top: 8px;
+            font-size: 0.8em;
+            opacity: 0.95;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 6px 10px;
+            border-radius: 5px;
+        }
+
+        .timestamp {
+            text-align: center;
+            font-size: 0.75em;
+            color: #95a5a6;
+            margin-top: 10px;
+        }
+
+        .last-update {
+            font-size: 0.75em;
+            color: #6c757d;
+            text-align: right;
+            margin-top: 5px;
+        }
+
+        .loading-message {
+            text-align: center;
+            font-style: italic;
+            color: #95a5a6;
+            padding: 40px;
+        }
+
+        .error-card {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 1.8em;
+            }
+
+            .status-bar {
+                font-size: 0.85em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🏭 Water Treatment Plant - Equipment Monitor</h1>
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-indicator"></div>
+                <span>Auto-refresh: <strong id="refreshCounter">0</strong>s / 10s</span>
+            </div>
+            <div class="status-item">
+                <span>⏰ Last Update: <strong id="lastUpdate">--:--:--</strong></span>
+            </div>
+            <div class="status-item">
+                <span>📊 Active Machines: <strong id="activeMachines">0/16</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-grid" id="dashboardGrid">
+        <div class="loading-message">⏳ Loading machine data...</div>
+    </div>
+
+    <script>
+        // Flask API Configuration
+        const API_BASE_URL = 'http://127.0.0.1:5000/api/equipment-failure';
+        
+        // Machine definitions
+        const MACHINES = [
+            { id: 'BAR_SCREEN_01', name: 'Bar Screen Rake', stage: 'Screening' },
+            { id: 'GRIT_PUMP_01', name: 'Grit Pump', stage: 'Grit Removal' },
+            { id: 'GRIT_AERATOR_01', name: 'Grit Aerator', stage: 'Grit Removal' },
+            { id: 'AERATION_BLOWER_01', name: 'Aeration Blower 1', stage: 'Aeration' },
+            { id: 'AERATION_BLOWER_02', name: 'Aeration Blower 2', stage: 'Aeration' },
+            { id: 'RAS_PUMP_01', name: 'RAS Pump', stage: 'Clarification' },
+            { id: 'PSF_PUMP_01', name: 'PSF Pump', stage: 'Filtration' },
+            { id: 'ACF_PUMP_01', name: 'ACF Pump', stage: 'Filtration' },
+            { id: 'UF_PUMP_01', name: 'UF Pump', stage: 'Filtration' },
+            { id: 'RO_HP_PUMP_01', name: 'RO High Pressure Pump', stage: 'RO System' },
+            { id: 'UV_SYSTEM_01', name: 'UV Disinfection System', stage: 'Disinfection' },
+            { id: 'OZONE_GEN_01', name: 'Ozone Generator', stage: 'Disinfection' },
+            { id: 'SLUDGE_PUMP_01', name: 'Sludge Pump', stage: 'Sludge Treatment' },
+            { id: 'THICKENER_RAKE_01', name: 'Thickener Rake', stage: 'Sludge Treatment' },
+            { id: 'SCREW_PRESS_01', name: 'Screw Press', stage: 'Dewatering' },
+            { id: 'BELT_PRESS_01', name: 'Belt Press', stage: 'Dewatering' }
+        ];
+
+        // Store machine data
+        let machineData = {};
+        let refreshCounter = 0;
+        let refreshInterval = null;
+        let counterInterval = null;
+
+        // Fetch data from Flask API for a single machine
+        async function fetchMachineData(machineId) {
+            try {
+                const response = await fetch(`${API_BASE_URL}?machine_id=${machineId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error(`Error fetching data for ${machineId}:`, error);
+                return null;
+            }
+        }
+
+        // Fetch data for all machines
+        async function fetchAllMachineData() {
+            console.log('Fetching data for all machines...');
+            
+            const promises = MACHINES.map(machine => 
+                fetchMachineData(machine.id).then(data => ({
+                    machineId: machine.id,
+                    data: data
+                }))
+            );
+
+            const results = await Promise.all(promises);
+            
+            results.forEach(result => {
+                if (result.data && result.data.status === 'success') {
+                    machineData[result.machineId] = result.data;
+                }
+            });
+
+            updateDashboard();
+            updateLastUpdateTime();
+            updateActiveMachinesCount();
+            refreshCounter = 0;
+        }
+
+        // Update the dashboard display
+        function updateDashboard() {
+            const grid = document.getElementById('dashboardGrid');
+            grid.innerHTML = '';
+
+            MACHINES.forEach(machine => {
+                const data = machineData[machine.id];
+                const card = createMachineCard(machine, data);
+                grid.appendChild(card);
+            });
+        }
+
+        // Create a machine card element
+        function createMachineCard(machine, data) {
+            const card = document.createElement('div');
+            card.className = 'machine-card';
+
+            if (data) {
+                const healthScore = data.machine_health_score || 0;
+                const riskLevel = data.failure_prediction?.risk_level?.toLowerCase() || 'unknown';
+                
+                card.classList.add(
+                    riskLevel === 'high' ? 'critical' :
+                    riskLevel === 'medium' ? 'warning' : 'normal'
+                );
+
+                const paramAnalysis = data.parameter_analysis || {};
+                const inputs = data.inputs || {};
+
+                card.innerHTML = `
+                    <div class="machine-header">
+                        <div>
+                            <div class="machine-name">${machine.name}</div>
+                            <div class="machine-id">${machine.id} - ${machine.stage}</div>
+                        </div>
+                        <div class="status-badge status-${data.machine_status || 'stopped'}">
+                            ${data.machine_status || 'Unknown'}
+                        </div>
+                    </div>
+
+                    <div class="health-score">
+                        <div class="health-circle ${getHealthClass(healthScore)}">
+                            ${healthScore.toFixed(1)}%
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <div class="metric-label">🌡️ Temperature</div>
+                            <div class="metric-value">${inputs.temperature_C?.toFixed(1) || '--'}°C</div>
+                            <div class="metric-status status-${paramAnalysis.temperature_status?.toLowerCase() || 'normal'}">
+                                ${paramAnalysis.temperature_status || 'Normal'}
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">📳 Vibration</div>
+                            <div class="metric-value">${inputs.vibration_mm_s_RMS?.toFixed(2) || '--'} mm/s</div>
+                            <div class="metric-status status-${paramAnalysis.vibration_status?.toLowerCase() || 'normal'}">
+                                ${paramAnalysis.vibration_status || 'Normal'}
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">⚡ Current Draw</div>
+                            <div class="metric-value">${inputs.current_draw_Amps?.toFixed(1) || '--'} A</div>
+                            <div class="metric-status status-${paramAnalysis.current_status?.toLowerCase() || 'normal'}">
+                                ${paramAnalysis.current_status || 'Normal'}
+                            </div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">💨 Pressure</div>
+                            <div class="metric-value">${inputs.pressure_PSI?.toFixed(1) || '--'} PSI</div>
+                            <div class="metric-status status-${paramAnalysis.pressure_status?.toLowerCase() || 'normal'}">
+                                ${paramAnalysis.pressure_status || 'Normal'}
+                            </div>
+                        </div>
+                    </div>
+
+                    ${createAlertsSection(data)}
+
+                    <div class="prediction-box">
+                        <div class="prediction-title">⏰ Failure Prediction</div>
+                        <div class="prediction-value">
+                            ${data.failure_prediction?.hours_to_potential_failure || '--'} hours
+                        </div>
+                        <div class="prediction-details">
+                            Failure Probability: <strong>${data.failure_prediction?.failure_probability_percent?.toFixed(1) || '--'}%</strong><br>
+                            Risk Level: <strong>${data.failure_prediction?.risk_level || 'Unknown'}</strong>
+                        </div>
+                        <div class="prediction-action">
+                            💡 ${data.failure_prediction?.recommended_action || 'Normal operation'}
+                        </div>
+                    </div>
+
+                    <div class="timestamp">
+                        ⏱️ Runtime: ${inputs.runtime_hours?.toFixed(1) || '--'} hrs | 
+                        ⚙️ Efficiency: ${data.machine_efficiency?.toFixed(1) || '--'}% |
+                        🔋 RUL: ${data.remaining_useful_life?.remaining_life_hours?.toFixed(0) || '--'} hrs
+                    </div>
+                    <div class="last-update">
+                        Updated: ${data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '--:--:--'}
+                    </div>
+                `;
+            } else {
+                card.classList.add('loading');
+                card.innerHTML = `
+                    <div class="machine-header">
+                        <div>
+                            <div class="machine-name">${machine.name}</div>
+                            <div class="machine-id">${machine.id} - ${machine.stage}</div>
+                        </div>
+                        <div class="status-badge status-stopped">No Data</div>
+                    </div>
+                    <div class="error-card">
+                        ⚠️ No data available<br>
+                        <small>Waiting for API response...</small>
+                    </div>
+                `;
+            }
+
+            return card;
+        }
+
+        // Create alerts section
+        function createAlertsSection(data) {
+            const alerts = [];
+            
+            // Collect alerts from various sources
+            if (data.electrical_analysis?.electrical_faults?.length > 0) {
+                alerts.push(...data.electrical_analysis.electrical_faults.map(f => ({ text: f, critical: true })));
+            }
+            if (data.vibration_analysis?.bearing_faults?.length > 0) {
+                alerts.push(...data.vibration_analysis.bearing_faults.map(f => ({ text: f, critical: false })));
+            }
+            if (data.parameter_analysis?.pressure_status === 'Critical') {
+                alerts.push({ text: '⚠️ Pressure Critical', critical: true });
+            }
+            if (data.parameter_analysis?.temperature_status === 'Warning') {
+                alerts.push({ text: '🌡️ Temperature Warning', critical: false });
+            }
+            if (data.thermal_analysis?.issue) {
+                alerts.push({ text: `🔥 ${data.thermal_analysis.issue}`, critical: false });
+            }
+
+            if (alerts.length === 0) return '';
+
+            return `
+                <div class="alerts">
+                    ${alerts.slice(0, 3).map(alert => `
+                        <div class="alert-item ${alert.critical ? 'alert-critical' : ''}">
+                            ${alert.text}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // Get health class based on score
+        function getHealthClass(score) {
+            if (score >= 85) return 'health-excellent';
+            if (score >= 70) return 'health-good';
+            if (score >= 50) return 'health-fair';
+            return 'health-poor';
+        }
+
+        // Update last update time display
+        function updateLastUpdateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            document.getElementById('lastUpdate').textContent = timeString;
+        }
+
+        // Update active machines count
+        function updateActiveMachinesCount() {
+            const activeCount = Object.keys(machineData).length;
+            document.getElementById('activeMachines').textContent = `${activeCount}/16`;
+        }
+
+        // Start periodic refresh
+        function startAutoRefresh() {
+            // Initial fetch
+            fetchAllMachineData();
+            
+            // Set up 10-second interval for data fetch
+            refreshInterval = setInterval(fetchAllMachineData, 10000);
+            
+            // Update counter display every second
+            counterInterval = setInterval(() => {
+                refreshCounter++;
+                document.getElementById('refreshCounter').textContent = refreshCounter;
+                if (refreshCounter >= 10) {
+                    refreshCounter = 0;
+                }
+            }, 1000);
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            console.log('Dashboard initialized');
+            startAutoRefresh();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (refreshInterval) clearInterval(refreshInterval);
+            if (counterInterval) clearInterval(counterInterval);
+        });
+    </script>
+</body>
+</html>

@@ -1,22 +1,27 @@
 """
-HydroNail ML API - Flask Server with Pure JSON Responses
+HydroNail ML API - Flask Server with Real-time MQTT Integration
 Complete REST API for Water Treatment AI System
 All 4 ML Models with JSON Output Only
 Smart India Hackathon 2025 | Team Nova_Minds
 """
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import joblib
 import numpy as np
 import json
 from datetime import datetime
 import logging
+import threading
+import time
+import paho.mqtt.client as mqtt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)
 
 # ============================================================
 # LOAD ALL MODELS WITH ERROR HANDLING
@@ -72,6 +77,126 @@ except Exception as e:
 print("="*60)
 print("🎉 HydroNail ML Server Ready!")
 print("="*60)
+
+# ============================================================
+# MQTT SENSOR READER WITH THREADING
+# ============================================================
+
+class MQTTSensorReader:
+    """Real-time MQTT sensor data reader with threading"""
+
+    def __init__(self):
+        self.mqtt_broker = "9b39969bf84848cca34a2913622c0a2c.s1.eu.hivemq.cloud"
+        self.mqtt_port = 8883
+        self.mqtt_username = "hydro"
+        self.mqtt_password = "Hydroneil@123"
+        self.client = None
+        self.sensor_data = {
+            "primary": {},
+            "secondary": {},
+            "tertiary": {},
+            "final": {}
+        }
+        self.running = False
+        self.lock = threading.Lock()
+        self.last_update = {
+            "primary": None,
+            "secondary": None,
+            "tertiary": None,
+            "final": None
+        }
+
+    def connect(self):
+        """Connect to HiveMQ broker"""
+        try:
+            self.client = mqtt.Client(client_id="hydronail_ml_api_" + str(int(time.time())))
+            self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
+            self.client.on_connect = self.on_connect
+            self.client.on_message = self.on_message
+            self.client.on_disconnect = self.on_disconnect
+            self.client.tls_set()
+
+            self.client.connect(self.mqtt_broker, self.mqtt_port, keepalive=60)
+            self.running = True
+            self.client.loop_start()
+            print("✅ Connected to HiveMQ MQTT Broker")
+            return True
+        except Exception as e:
+            print(f"⚠️ MQTT Connection Error: {e}")
+            self.running = False
+            return False
+
+    def on_connect(self, client, userdata, flags, rc):
+        """MQTT connection callback"""
+        if rc == 0:
+            print("🔗 MQTT Connected successfully")
+            client.subscribe("watertreatment/primary/all", qos=1)
+            client.subscribe("watertreatment/secondary/all", qos=1)
+            client.subscribe("watertreatment/tertiary/all", qos=1)
+            client.subscribe("watertreatment/final/all", qos=1)
+        else:
+            print(f"❌ Connection failed with code {rc}")
+            self.running = False
+
+    def on_disconnect(self, client, userdata, rc):
+        """MQTT disconnect callback"""
+        if rc != 0:
+            print(f"⚠️ Unexpected disconnection: {rc}")
+            self.running = False
+
+    def on_message(self, client, userdata, msg):
+        """MQTT message callback - extract sensor data"""
+        try:
+            payload = json.loads(msg.payload.decode())
+            
+            with self.lock:
+                if "primary" in msg.topic:
+                    self.sensor_data["primary"] = payload.get("sensors", {})
+                    self.last_update["primary"] = datetime.now().isoformat()
+                elif "secondary" in msg.topic:
+                    self.sensor_data["secondary"] = payload.get("sensors", {})
+                    self.last_update["secondary"] = datetime.now().isoformat()
+                elif "tertiary" in msg.topic:
+                    self.sensor_data["tertiary"] = payload.get("sensors", {})
+                    self.last_update["tertiary"] = datetime.now().isoformat()
+                elif "final" in msg.topic:
+                    self.sensor_data["final"] = payload.get("sensors", {})
+                    self.last_update["final"] = datetime.now().isoformat()
+        except Exception as e:
+            logger.error(f"Error processing MQTT message: {e}")
+
+    def get_sensor_value(self, stage, sensor_key):
+        """Get sensor value from cache - returns both value and unit"""
+        try:
+            with self.lock:
+                sensor_obj = self.sensor_data.get(stage, {}).get(sensor_key, {})
+                return {
+                    "value": sensor_obj.get("value", 0),
+                    "unit": sensor_obj.get("unit", ""),
+                    "status": sensor_obj.get("status", "UNKNOWN"),
+                    "critical": sensor_obj.get("critical", False),
+                    "timestamp": self.last_update.get(stage)
+                }
+        except:
+            return {"value": 0, "unit": "", "status": "ERROR", "critical": False, "timestamp": None}
+
+    def get_all_stage_data(self, stage):
+        """Get all sensor data for a stage"""
+        try:
+            with self.lock:
+                return self.sensor_data.get(stage, {})
+        except:
+            return {}
+
+    def disconnect(self):
+        """Disconnect from MQTT broker"""
+        if self.client:
+            self.running = False
+            self.client.loop_stop()
+            self.client.disconnect()
+            print("❌ Disconnected from MQTT")
+
+mqtt_reader = MQTTSensorReader()
 
 # ============================================================
 # PREDICTION FUNCTIONS - JSON OUTPUT ONLY
@@ -161,7 +286,6 @@ def predict_water_quality_json(pH, turbidity, temperature, dissolved_oxygen, tds
             "timestamp": datetime.now().isoformat()
         }
 
-
 def predict_chemical_dosing_json(pH, turbidity, temperature, dissolved_oxygen, tds, alkalinity, volume_m3):
     """Model 2: Chemical Dosing - Returns JSON"""
     
@@ -245,7 +369,6 @@ def predict_chemical_dosing_json(pH, turbidity, temperature, dissolved_oxygen, t
         }
     }
 
-
 def predict_equipment_failure_json(vibration, temperature, pressure, current, runtime_hours):
     """Model 3: Equipment Failure Prediction - Returns JSON"""
     
@@ -324,7 +447,6 @@ def predict_equipment_failure_json(vibration, temperature, pressure, current, ru
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-
 
 def predict_treatment_process_json(pH, turbidity, temperature, dissolved_oxygen, tds, conductivity, chlorine, hardness, flow_rate, tank1, tank2, tank3, hour, prev_stage, source):
     """Model 4: Treatment Process Controller - Returns JSON"""
@@ -410,7 +532,7 @@ def predict_treatment_process_json(pH, turbidity, temperature, dissolved_oxygen,
         }
 
 # ============================================================
-# API ENDPOINTS - JSON ONLY
+# API ENDPOINTS - JSON ONLY (FIXED METHOD ALLOWED)
 # ============================================================
 
 @app.route('/api/health', methods=['GET'])
@@ -419,6 +541,7 @@ def health_check():
     return jsonify({
         "status": "operational",
         "timestamp": datetime.now().isoformat(),
+        "mqtt_connected": mqtt_reader.running,
         "models": {
             "water_quality": water_quality_model is not None,
             "chemical_dosing": chemical_models is not None,
@@ -522,208 +645,71 @@ def treatment_process_endpoint():
             "timestamp": datetime.now().isoformat()
         }), 400
 
-@app.route('/', methods=['GET'])
-def home():
-    """API Documentation - JSON Format"""
+@app.route('/api/mqtt/status', methods=['GET'])
+def mqtt_status():
+    """Check MQTT connection and latest sensor data"""
     return jsonify({
-        "name": "HydroNail ML API",
-        "description": "Complete water treatment AI system with 4 ML models",
-        "version": "1.0",
-        "team": "Team Nova_Minds | Smart India Hackathon 2025",
-        "endpoints": {
-            "health": {
-                "method": "GET",
-                "url": "/api/health",
-                "description": "Check API and model status"
-            },
-            "water_quality": {
-                "method": "POST",
-                "url": "/api/water-quality",
-                "description": "Predict water quality score (96.31% accuracy)",
-                "parameters": {
-                    "pH": "float (0-14)",
-                    "turbidity": "float (NTU)",
-                    "temperature": "float (°C)",
-                    "dissolved_oxygen": "float (mg/L)",
-                    "tds": "float (ppm)",
-                    "conductivity": "float (µS/cm)",
-                    "chlorine": "float (mg/L)",
-                    "hardness": "float (mg/L)"
-                }
-            },
-            "chemical_dosing": {
-                "method": "POST",
-                "url": "/api/chemical-dosing",
-                "description": "Calculate optimal chemical quantities (R² > 0.98)",
-                "parameters": {
-                    "pH": "float (0-14)",
-                    "turbidity": "float (NTU)",
-                    "temperature": "float (°C)",
-                    "dissolved_oxygen": "float (mg/L)",
-                    "tds": "float (ppm)",
-                    "alkalinity": "float (mg/L as CaCO₃)",
-                    "volume_m3": "float (m³)"
-                }
-            },
-            "equipment_failure": {
-                "method": "POST",
-                "url": "/api/equipment-failure",
-                "description": "Predict equipment failure (97.44% accuracy, 24-48 hour warning)",
-                "parameters": {
-                    "vibration": "float (mm/s RMS)",
-                    "temperature": "float (°C)",
-                    "pressure": "float (PSI)",
-                    "current": "float (Amps)",
-                    "runtime_hours": "float (hours)"
-                }
-            },
-            "treatment_process": {
-                "method": "POST",
-                "url": "/api/treatment-process",
-                "description": "Generate treatment control plan (25 outputs)",
-                "parameters": {
-                    "pH": "float", "turbidity": "float", "temperature": "float",
-                    "dissolved_oxygen": "float", "tds": "float", "conductivity": "float",
-                    "chlorine": "float", "hardness": "float", "flow_rate": "float",
-                    "tank1": "float (0-100%)", "tank2": "float (0-100%)", "tank3": "float (0-100%)",
-                    "hour": "int (0-23)", "prev_stage": "int (0-3)", "source": "int (0-2)"
-                }
-            }
-        }
+        "mqtt_connected": mqtt_reader.running,
+        "broker": mqtt_reader.mqtt_broker,
+        "sensor_data_cached": {
+            "primary": len(mqtt_reader.sensor_data["primary"]) > 0,
+            "secondary": len(mqtt_reader.sensor_data["secondary"]) > 0,
+            "tertiary": len(mqtt_reader.sensor_data["tertiary"]) > 0,
+            "final": len(mqtt_reader.sensor_data["final"]) > 0
+        },
+        "last_updates": mqtt_reader.last_update,
+        "timestamp": datetime.now().isoformat()
     }), 200
 
-# ============================================================
-# ERROR HANDLERS
-# ============================================================
+@app.route('/api/stage/<stage>/sensor-data', methods=['GET'])
+def get_stage_sensor_data(stage):
+    """Get all sensor data for specific stage (FIXED: GET method)"""
+    if stage not in ["primary", "secondary", "tertiary", "final"]:
+        return jsonify({
+            "status": "error",
+            "message": "Invalid stage. Use: primary, secondary, tertiary, final",
+            "timestamp": datetime.now().isoformat()
+        }), 400
 
-@app.errorhandler(404)
-def not_found(error):
     return jsonify({
-        "status": "error",
-        "message": "Endpoint not found",
+        "status": "success",
+        "stage": stage,
+        "sensors": mqtt_reader.get_all_stage_data(stage),
+        "last_update": mqtt_reader.last_update.get(stage),
+        "mqtt_connected": mqtt_reader.running,
         "timestamp": datetime.now().isoformat()
-    }), 404
+    }), 200
 
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({
-        "status": "error",
-        "message": "Internal server error",
-        "timestamp": datetime.now().isoformat()
-    }), 500
-
-# ============================================================
-# MAIN SERVER START
-# ============================================================
-
-
-import paho.mqtt.client as mqtt
-import threading
-import time
-
-class MQTTSensorReader:
-    """Real-time MQTT sensor data reader with threading"""
-
-    def __init__(self):
-        self.mqtt_broker = "9b39969bf84848cca34a2913622c0a2c.s1.eu.hivemq.cloud"
-        self.mqtt_port = 8883
-        self.mqtt_username = "hydro"
-        self.mqtt_password = "Hydroneil@123"
-        self.client = None
-        self.sensor_data = {
-            "primary": {},
-            "secondary": {},
-            "tertiary": {},
-            "final": {}
-        }
-        self.machine_data = {
-            "summary": {},
-            "individual": {}
-        }
-        self.running = False
-        self.lock = threading.Lock()
-
-    def connect(self):
-        """Connect to HiveMQ broker"""
-        try:
-            self.client = mqtt.Client(client_id="hydronail_ml_api")
-            self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
-            self.client.on_connect = self.on_connect
-            self.client.on_message = self.on_message
-            self.client.tls_set()
-
-            self.client.connect(self.mqtt_broker, self.mqtt_port, keepalive=60)
-            self.running = True
-            self.client.loop_start()
-            print("✅ Connected to HiveMQ MQTT Broker")
-            return True
-        except Exception as e:
-            print(f"⚠️ MQTT Connection Error: {e}")
-            return False
-
-    def on_connect(self, client, userdata, flags, rc):
-        """MQTT connection callback"""
-        if rc == 0:
-            print("🔗 MQTT Connected successfully")
-            client.subscribe("watertreatment/primary/all", qos=1)
-            client.subscribe("watertreatment/secondary/all", qos=1)
-            client.subscribe("watertreatment/tertiary/all", qos=1)
-            client.subscribe("watertreatment/final/all", qos=1)
-            client.subscribe("watertreatment/machines/summary", qos=1)
-        else:
-            print(f"❌ Connection failed with code {rc}")
-
-    def on_message(self, client, userdata, msg):
-        """MQTT message callback - extract sensor data"""
-        try:
-            payload = json.loads(msg.payload.decode())
-
-            with self.lock:
-                if "primary" in msg.topic:
-                    self.sensor_data["primary"] = payload.get("sensors", {})
-                elif "secondary" in msg.topic:
-                    self.sensor_data["secondary"] = payload.get("sensors", {})
-                elif "tertiary" in msg.topic:
-                    self.sensor_data["tertiary"] = payload.get("sensors", {})
-                elif "final" in msg.topic:
-                    self.sensor_data["final"] = payload.get("sensors", {})
-                elif "machines/summary" in msg.topic:
-                    self.machine_data["summary"] = payload
-        except Exception as e:
-            logger.error(f"Error processing MQTT message: {e}")
-
-    def get_sensor_value(self, stage, sensor_key):
-        """Get sensor value from cache"""
-        try:
-            with self.lock:
-                sensor_obj = self.sensor_data.get(stage, {}).get(sensor_key, {})
-                return sensor_obj.get("value", 0)
-        except:
-            return 0
-
-    def disconnect(self):
-        """Disconnect from MQTT broker"""
-        if self.client:
-            self.running = False
-            self.client.loop_stop()
-            self.client.disconnect()
-            print("❌ Disconnected from MQTT")
-
-mqtt_reader = MQTTSensorReader()
-
-
-def predict_stage_water_quality(stage):
-    """Predict water quality for specific treatment stage using real-time MQTT data"""
+@app.route('/api/stage/<stage>/water-quality', methods=['GET'])
+def stage_water_quality(stage):
+    """Get water quality prediction for specific stage using real-time MQTT data (FIXED: GET method)"""
+    if stage not in ["primary", "secondary", "tertiary", "final"]:
+        return jsonify({
+            "status": "error",
+            "message": "Invalid stage. Use: primary, secondary, tertiary, final",
+            "timestamp": datetime.now().isoformat()
+        }), 400
 
     try:
-        pH = mqtt_reader.get_sensor_value(stage, "ph")
-        turbidity = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
-        temperature = mqtt_reader.get_sensor_value(stage, "temperature_c")
-        dissolved_oxygen = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
-        tds = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
-        conductivity = mqtt_reader.get_sensor_value(stage, "conductivity_µs_cm")  # Using pH as fallback
-        chlorine = mqtt_reader.get_sensor_value(stage, "total_chlorine_mg_l")
-        hardness = mqtt_reader.get_sensor_value(stage, "tss_mg_l")
+        # Fetch real MQTT sensor data
+        pH_data = mqtt_reader.get_sensor_value(stage, "ph")
+        turbidity_data = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
+        temperature_data = mqtt_reader.get_sensor_value(stage, "temperature_c")
+        dissolved_oxygen_data = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
+        tds_data = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
+        conductivity_data = mqtt_reader.get_sensor_value(stage, "conductivity_µs_cm")
+        chlorine_data = mqtt_reader.get_sensor_value(stage, "total_chlorine_mg_l")
+        hardness_data = mqtt_reader.get_sensor_value(stage, "hardness_mg_l")
+
+        # Get values, fallback to 0 if no data
+        pH = pH_data["value"] or 7.0
+        turbidity = turbidity_data["value"] or 20
+        temperature = temperature_data["value"] or 25
+        dissolved_oxygen = dissolved_oxygen_data["value"] or 7.0
+        tds = tds_data["value"] or 300
+        conductivity = conductivity_data["value"] or 400
+        chlorine = chlorine_data["value"] or 1.0
+        hardness = hardness_data["value"] or 150
 
         result = predict_water_quality_json(
             pH=pH,
@@ -737,27 +723,55 @@ def predict_stage_water_quality(stage):
         )
 
         result["stage"] = stage
-        result["mqtt_data_source"] = True
-        return result
-
+        result["mqtt_data_source"] = mqtt_reader.running
+        result["sensor_status"] = {
+            "pH": pH_data,
+            "turbidity": turbidity_data,
+            "temperature": temperature_data,
+            "dissolved_oxygen": dissolved_oxygen_data,
+            "tds": tds_data,
+            "conductivity": conductivity_data,
+            "chlorine": chlorine_data,
+            "hardness": hardness_data
+        }
+        
+        return jsonify(result), 200
     except Exception as e:
-        return {
+        return jsonify({
             "status": "error",
             "stage": stage,
             "error": str(e),
             "timestamp": datetime.now().isoformat()
-        }
+        }), 400
 
-def predict_stage_chemical_dosing(stage, volume_m3=500):
-    """Chemical dosing recommendation for specific stage"""
+@app.route('/api/stage/<stage>/chemical-dosing', methods=['GET'])
+def stage_chemical_dosing(stage):
+    """Get chemical dosing for specific stage using real-time MQTT data (FIXED: GET method)"""
+    if stage not in ["primary", "secondary", "tertiary", "final"]:
+        return jsonify({
+            "status": "error",
+            "message": "Invalid stage. Use: primary, secondary, tertiary, final",
+            "timestamp": datetime.now().isoformat()
+        }), 400
 
     try:
-        pH = mqtt_reader.get_sensor_value(stage, "ph")
-        turbidity = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
-        temperature = mqtt_reader.get_sensor_value(stage, "temperature_c")
-        dissolved_oxygen = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
-        tds = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
-        alkalinity = mqtt_reader.get_sensor_value(stage, "tss_mg_l")
+        volume = request.args.get('volume', 500, type=float)
+
+        # Fetch real MQTT sensor data
+        pH_data = mqtt_reader.get_sensor_value(stage, "ph")
+        turbidity_data = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
+        temperature_data = mqtt_reader.get_sensor_value(stage, "temperature_c")
+        dissolved_oxygen_data = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
+        tds_data = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
+        alkalinity_data = mqtt_reader.get_sensor_value(stage, "alkalinity_mg_l")
+
+        # Get values, fallback to 0 if no data
+        pH = pH_data["value"] or 6.5
+        turbidity = turbidity_data["value"] or 45
+        temperature = temperature_data["value"] or 28
+        dissolved_oxygen = dissolved_oxygen_data["value"] or 5.5
+        tds = tds_data["value"] or 420
+        alkalinity = alkalinity_data["value"] or 150
 
         result = predict_chemical_dosing_json(
             pH=pH,
@@ -766,67 +780,24 @@ def predict_stage_chemical_dosing(stage, volume_m3=500):
             dissolved_oxygen=dissolved_oxygen,
             tds=tds,
             alkalinity=alkalinity,
-            volume_m3=volume_m3
+            volume_m3=volume
         )
 
         result["stage"] = stage
-        result["mqtt_data_source"] = True
-        return result
-
+        result["mqtt_data_source"] = mqtt_reader.running
+        
+        return jsonify(result), 200
     except Exception as e:
-        return {
+        return jsonify({
             "status": "error",
             "stage": stage,
             "error": str(e),
             "timestamp": datetime.now().isoformat()
-        }
-
-
-@app.route('/api/mqtt/status', methods=['GET'])
-def mqtt_status():
-    """Check MQTT connection and latest sensor data"""
-    return jsonify({
-        "mqtt_connected": mqtt_reader.running,
-        "broker": mqtt_reader.mqtt_broker,
-        "sensor_data_cached": {
-            "primary": len(mqtt_reader.sensor_data["primary"]) > 0,
-            "secondary": len(mqtt_reader.sensor_data["secondary"]) > 0,
-            "tertiary": len(mqtt_reader.sensor_data["tertiary"]) > 0,
-            "final": len(mqtt_reader.sensor_data["final"]) > 0
-        },
-        "timestamp": datetime.now().isoformat()
-    }), 200
-
-@app.route('/api/stage/<stage>/water-quality', methods=['GET'])
-def stage_water_quality(stage):
-    """Get water quality prediction for specific stage using real-time MQTT data"""
-    if stage not in ["primary", "secondary", "tertiary", "final"]:
-        return jsonify({
-            "status": "error",
-            "message": "Invalid stage. Use: primary, secondary, tertiary, final",
-            "timestamp": datetime.now().isoformat()
         }), 400
-
-    result = predict_stage_water_quality(stage)
-    return jsonify(result), 200
-
-@app.route('/api/stage/<stage>/chemical-dosing', methods=['GET'])
-def stage_chemical_dosing(stage):
-    """Get chemical dosing for specific stage using real-time MQTT data"""
-    if stage not in ["primary", "secondary", "tertiary", "final"]:
-        return jsonify({
-            "status": "error",
-            "message": "Invalid stage. Use: primary, secondary, tertiary, final",
-            "timestamp": datetime.now().isoformat()
-        }), 400
-
-    volume = request.args.get('volume', 500, type=float)
-    result = predict_stage_chemical_dosing(stage, volume)
-    return jsonify(result), 200
 
 @app.route('/api/stage/<stage>/equipment-health', methods=['GET'])
 def stage_equipment_health(stage):
-    """Get equipment health prediction for stage machines"""
+    """Get equipment health prediction for stage machines (FIXED: GET method)"""
     if stage not in ["primary", "secondary", "tertiary", "final"]:
         return jsonify({
             "status": "error",
@@ -855,20 +826,177 @@ def stage_equipment_health(stage):
 
 @app.route('/api/all-stages/report', methods=['GET'])
 def all_stages_report():
-    """Comprehensive report for all treatment stages"""
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "stages": {
-            "primary": predict_stage_water_quality("primary"),
-            "secondary": predict_stage_water_quality("secondary"),
-            "tertiary": predict_stage_water_quality("tertiary"),
-            "final": predict_stage_water_quality("final")
-        },
-        "mqtt_status": mqtt_reader.running,
-        "recommendation": "Automatic adjustments recommended every 10 seconds based on real-time MQTT data"
-    }
-    return jsonify(report), 200
+    """Comprehensive report for all treatment stages (FIXED: GET method)"""
+    try:
+        primary_wq = predict_stage_water_quality("primary")
+        secondary_wq = predict_stage_water_quality("secondary")
+        tertiary_wq = predict_stage_water_quality("tertiary")
+        final_wq = predict_stage_water_quality("final")
 
+        report = {
+            "timestamp": datetime.now().isoformat(),
+            "mqtt_status": mqtt_reader.running,
+            "stages": {
+                "primary": primary_wq,
+                "secondary": secondary_wq,
+                "tertiary": tertiary_wq,
+                "final": final_wq
+            },
+            "overall_efficiency": round((
+                float(primary_wq.get("output", {}).get("quality_score", 0)) +
+                float(secondary_wq.get("output", {}).get("quality_score", 0)) +
+                float(tertiary_wq.get("output", {}).get("quality_score", 0)) +
+                float(final_wq.get("output", {}).get("quality_score", 0))
+            ) / 4, 1),
+            "recommendation": "Automatic adjustments recommended every 10 seconds based on real-time MQTT data"
+        }
+        return jsonify(report), 200
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 400
+
+def predict_stage_water_quality(stage):
+    """Predict water quality for specific treatment stage using real-time MQTT data"""
+    try:
+        pH_data = mqtt_reader.get_sensor_value(stage, "ph")
+        turbidity_data = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
+        temperature_data = mqtt_reader.get_sensor_value(stage, "temperature_c")
+        dissolved_oxygen_data = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
+        tds_data = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
+        conductivity_data = mqtt_reader.get_sensor_value(stage, "conductivity_µs_cm")
+        chlorine_data = mqtt_reader.get_sensor_value(stage, "total_chlorine_mg_l")
+        hardness_data = mqtt_reader.get_sensor_value(stage, "hardness_mg_l")
+
+        result = predict_water_quality_json(
+            pH=pH_data["value"] or 7.0,
+            turbidity=turbidity_data["value"] or 20,
+            temperature=temperature_data["value"] or 25,
+            dissolved_oxygen=dissolved_oxygen_data["value"] or 7.0,
+            tds=tds_data["value"] or 300,
+            conductivity=conductivity_data["value"] or 400,
+            chlorine=chlorine_data["value"] or 1.0,
+            hardness=hardness_data["value"] or 150
+        )
+
+        result["stage"] = stage
+        result["mqtt_data_source"] = mqtt_reader.running
+        return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "stage": stage,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.route('/', methods=['GET'])
+def home():
+    """API Documentation - JSON Format"""
+    return jsonify({
+        "name": "HydroNail ML API",
+        "description": "Complete water treatment AI system with 4 ML models",
+        "version": "2.0",
+        "team": "Team Nova_Minds | Smart India Hackathon 2025",
+        "timestamp": datetime.now().isoformat(),
+        "mqtt_status": {
+            "connected": mqtt_reader.running,
+            "broker": mqtt_reader.mqtt_broker,
+            "port": mqtt_reader.mqtt_port
+        },
+        "endpoints": {
+            "health": {
+                "method": "GET",
+                "url": "/api/health",
+                "description": "Check API and model status"
+            },
+            "water_quality_post": {
+                "method": "POST",
+                "url": "/api/water-quality",
+                "description": "Predict water quality score (96.31% accuracy)"
+            },
+            "water_quality_mqtt": {
+                "method": "GET",
+                "url": "/api/stage/<stage>/water-quality",
+                "description": "Get water quality for stage using MQTT data",
+                "params": "stage: primary|secondary|tertiary|final"
+            },
+            "chemical_dosing_post": {
+                "method": "POST",
+                "url": "/api/chemical-dosing",
+                "description": "Calculate optimal chemical quantities (R² > 0.98)"
+            },
+            "chemical_dosing_mqtt": {
+                "method": "GET",
+                "url": "/api/stage/<stage>/chemical-dosing?volume=500",
+                "description": "Get chemical dosing for stage using MQTT data"
+            },
+            "equipment_failure": {
+                "method": "POST",
+                "url": "/api/equipment-failure",
+                "description": "Predict equipment failure (97.44% accuracy)"
+            },
+            "equipment_health": {
+                "method": "GET",
+                "url": "/api/stage/<stage>/equipment-health",
+                "description": "Get equipment health for stage"
+            },
+            "treatment_process": {
+                "method": "POST",
+                "url": "/api/treatment-process",
+                "description": "Generate treatment control plan (25 outputs)"
+            },
+            "sensor_data": {
+                "method": "GET",
+                "url": "/api/stage/<stage>/sensor-data",
+                "description": "Get all sensor data for stage"
+            },
+            "mqtt_status": {
+                "method": "GET",
+                "url": "/api/mqtt/status",
+                "description": "Check MQTT connection and cached data"
+            },
+            "all_stages_report": {
+                "method": "GET",
+                "url": "/api/all-stages/report",
+                "description": "Comprehensive report for all treatment stages"
+            }
+        }
+    }), 200
+
+# ============================================================
+# ERROR HANDLERS
+# ============================================================
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "status": "error",
+        "message": "Endpoint not found",
+        "timestamp": datetime.now().isoformat()
+    }), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({
+        "status": "error",
+        "message": "Method not allowed. Check API documentation.",
+        "timestamp": datetime.now().isoformat()
+    }), 405
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({
+        "status": "error",
+        "message": "Internal server error",
+        "timestamp": datetime.now().isoformat()
+    }), 500
+
+# ============================================================
+# MAIN SERVER START
+# ============================================================
 
 if __name__ == '__main__':
     print("\n" + "="*60)
