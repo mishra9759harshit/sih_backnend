@@ -19,6 +19,8 @@ import logging
 import sqlite3
 from threading import Lock
 import time
+import traceback
+from flask_cors import CORS 
 
 # ============================================================
 # COMPREHENSIVE SQLite LOGGING SYSTEM - EVERY ACTIVITY
@@ -876,6 +878,11 @@ api_logger = ComprehensiveAPILogger()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 app = Flask(__name__)
+CORS(app)
+
+# ============================================================
+# NUMPY TYPE CONVERSION HELPER - CRITICAL FIX
+# ============================================================
 
 # ============================================================
 # NUMPY TYPE CONVERSION HELPER - CRITICAL FIX
@@ -1065,6 +1072,311 @@ def predict_water_quality_json(pH, turbidity, temperature, dissolved_oxygen, tds
             "model": "Water Quality Prediction",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
+        }
+
+def predict_treatment_process_realtime():
+    """
+    Real-time treatment process control using MQTT machine data
+    Returns equipment control decisions based on actual machine status
+    """
+    try:
+        # ============================================================
+        # GET REAL-TIME MACHINE STATUS FROM MQTT
+        # ============================================================
+        machines = mqtt_reader.get_all_machines()
+        
+        # Collect running machines by stage
+        running_machines = {
+            'screening': [],
+            'grit_removal': [],
+            'aeration': [],
+            'clarification': [],
+            'filtration': [],
+            'ro_system': [],
+            'disinfection': [],
+            'sludge_treatment': [],
+            'dewatering': []
+        }
+        
+        # Calculate real-time metrics
+        total_machines = len(machines)
+        running_count = 0
+        stopped_count = 0
+        maintenance_count = 0
+        total_power_kw = 0.0
+        total_efficiency = 0.0
+        
+        for machine_id, machine_data in machines.items():
+            stage = machine_data.get('process_stage', 'unknown')
+            status = machine_data.get('status', 'stopped')
+            
+            if status == 'running':
+                running_count += 1
+                if stage in running_machines:
+                    running_machines[stage].append(machine_id)
+                total_power_kw += machine_data.get('power_kw', 0.0)
+                total_efficiency += machine_data.get('efficiency_percent', 0.0)
+            elif status == 'maintenance':
+                maintenance_count += 1
+            else:
+                stopped_count += 1
+        
+        avg_efficiency = (total_efficiency / running_count) if running_count > 0 else 0.0
+        
+        # ============================================================
+        # GET REAL-TIME SENSOR DATA FROM ALL STAGES
+        # ============================================================
+        
+        # Primary Stage Sensors
+        primary_ph = mqtt_reader.get_sensor_value("primary", "ph")
+        primary_turbidity = mqtt_reader.get_sensor_value("primary", "turbidity_ntu")
+        primary_temp = mqtt_reader.get_sensor_value("primary", "temperature_c")
+        primary_do = mqtt_reader.get_sensor_value("primary", "dissolved_oxygen_mg_l")
+        primary_tds = mqtt_reader.get_sensor_value("primary", "tds_mg_l")
+        
+        # Secondary Stage Sensors
+        secondary_ph = mqtt_reader.get_sensor_value("secondary", "ph")
+        secondary_turbidity = mqtt_reader.get_sensor_value("secondary", "turbidity_ntu")
+        secondary_do = mqtt_reader.get_sensor_value("secondary", "dissolved_oxygen_mg_l")
+        
+        # Tertiary Stage Sensors
+        tertiary_turbidity = mqtt_reader.get_sensor_value("tertiary", "turbidity_ntu")
+        tertiary_chlorine = mqtt_reader.get_sensor_value("tertiary", "total_chlorine_mg_l")
+        
+        # Final Stage Sensors
+        final_ph = mqtt_reader.get_sensor_value("final", "ph")
+        final_turbidity = mqtt_reader.get_sensor_value("final", "turbidity_ntu")
+        final_chlorine = mqtt_reader.get_sensor_value("final", "total_chlorine_mg_l")
+        final_quality = mqtt_reader.get_sensor_value("final", "hardness_mg_l")
+        
+        # Plant Status
+        flow_rate = mqtt_reader.get_sensor_value("primary", "flow_rate_m3_h") or 1200.0
+        tank1_level = mqtt_reader.get_sensor_value("primary", "tank_level_percent") or 75.0
+        tank2_level = mqtt_reader.get_sensor_value("secondary", "tank_level_percent") or 60.0
+        tank3_level = mqtt_reader.get_sensor_value("tertiary", "tank_level_percent") or 80.0
+        
+        # ============================================================
+        # BUILD EQUIPMENT CONTROL BASED ON REAL MACHINE STATUS
+        # ============================================================
+        
+        equipment_control = {
+            "primary_treatment": {
+                "bar_screen": machines.get('BAR_SCREEN_01', {}).get('status', 'stopped'),
+                "bar_screen_speed": machines.get('BAR_SCREEN_01', {}).get('speed_percent', 0.0),
+                "grit_pump": machines.get('GRIT_PUMP_01', {}).get('status', 'stopped'),
+                "grit_pump_flow": machines.get('GRIT_PUMP_01', {}).get('flow_m3_h', 0.0),
+                "grit_aerator": machines.get('GRIT_AERATOR_01', {}).get('status', 'stopped'),
+                "grit_aerator_power": machines.get('GRIT_AERATOR_01', {}).get('power_kw', 0.0)
+            },
+            "secondary_treatment": {
+                "aeration_blower_1": machines.get('AERATION_BLOWER_01', {}).get('status', 'stopped'),
+                "aeration_blower_1_speed": machines.get('AERATION_BLOWER_01', {}).get('speed_percent', 0.0),
+                "aeration_blower_2": machines.get('AERATION_BLOWER_02', {}).get('status', 'stopped'),
+                "aeration_blower_2_speed": machines.get('AERATION_BLOWER_02', {}).get('speed_percent', 0.0),
+                "air_flow_m3_min": (
+                    machines.get('AERATION_BLOWER_01', {}).get('flow_m3_h', 0.0) +
+                    machines.get('AERATION_BLOWER_02', {}).get('flow_m3_h', 0.0)
+                ) / 60.0,
+                "ras_pump": machines.get('RAS_PUMP_01', {}).get('status', 'stopped'),
+                "sludge_recirculation_percent": machines.get('RAS_PUMP_01', {}).get('speed_percent', 0.0)
+            },
+            "tertiary_treatment": {
+                "psf_pump": machines.get('PSF_PUMP_01', {}).get('status', 'stopped'),
+                "psf_pump_flow": machines.get('PSF_PUMP_01', {}).get('flow_m3_h', 0.0),
+                "acf_pump": machines.get('ACF_PUMP_01', {}).get('status', 'stopped'),
+                "acf_pump_flow": machines.get('ACF_PUMP_01', {}).get('flow_m3_h', 0.0),
+                "uf_pump": machines.get('UF_PUMP_01', {}).get('status', 'stopped'),
+                "uf_pump_pressure": machines.get('UF_PUMP_01', {}).get('pressure_bar', 0.0),
+                "ro_hp_pump": machines.get('RO_HP_PUMP_01', {}).get('status', 'stopped'),
+                "ro_pressure_bar": machines.get('RO_HP_PUMP_01', {}).get('pressure_bar', 0.0)
+            },
+            "disinfection": {
+                "uv_system": machines.get('UV_SYSTEM_01', {}).get('status', 'stopped'),
+                "uv_intensity_percent": machines.get('UV_SYSTEM_01', {}).get('speed_percent', 0.0),
+                "ozone_generator": machines.get('OZONE_GEN_01', {}).get('status', 'stopped'),
+                "ozone_production_g_h": machines.get('OZONE_GEN_01', {}).get('flow_m3_h', 0.0) * 10
+            },
+            "sludge_treatment": {
+                "sludge_pump": machines.get('SLUDGE_PUMP_01', {}).get('status', 'stopped'),
+                "sludge_flow_m3_h": machines.get('SLUDGE_PUMP_01', {}).get('flow_m3_h', 0.0),
+                "thickener_rake": machines.get('THICKENER_RAKE_01', {}).get('status', 'stopped'),
+                "thickener_rpm": machines.get('THICKENER_RAKE_01', {}).get('speed_percent', 0.0) / 10.0
+            },
+            "dewatering": {
+                "screw_press": machines.get('SCREW_PRESS_01', {}).get('status', 'stopped'),
+                "screw_press_throughput": machines.get('SCREW_PRESS_01', {}).get('flow_m3_h', 0.0),
+                "belt_press": machines.get('BELT_PRESS_01', {}).get('status', 'stopped'),
+                "belt_press_speed": machines.get('BELT_PRESS_01', {}).get('speed_percent', 0.0)
+            }
+        }
+        
+        # ============================================================
+        # OPTIMIZATION METRICS FROM REAL DATA
+        # ============================================================
+        
+        # Calculate treatment time based on flow rate
+        treatment_volume = flow_rate  # m3/h
+        treatment_time_hours = max(1.0, 1000.0 / flow_rate) if flow_rate > 0 else 2.0
+        
+        # Calculate chemical costs based on water quality
+        turbidity_reduction_needed = max(0, primary_turbidity - 5.0) if primary_turbidity else 0
+        chemical_cost = (turbidity_reduction_needed * 0.5) + (flow_rate * 0.02)
+        
+        # Power cost calculation
+        electricity_rate_inr_kwh = 8.0
+        power_cost_inr = total_power_kw * treatment_time_hours * electricity_rate_inr_kwh
+        total_cost_inr = power_cost_inr + chemical_cost
+        
+        # Quality score based on final stage sensors
+        quality_components = []
+        if final_ph and 6.5 <= final_ph <= 8.5:
+            quality_components.append(95)
+        elif final_ph:
+            quality_components.append(max(50, 100 - abs(final_ph - 7.0) * 10))
+        
+        if final_turbidity and final_turbidity < 5:
+            quality_components.append(95)
+        elif final_turbidity:
+            quality_components.append(max(50, 100 - final_turbidity * 2))
+        
+        if final_chlorine and 0.2 <= final_chlorine <= 1.0:
+            quality_components.append(90)
+        elif final_chlorine:
+            quality_components.append(70)
+        
+        final_quality_score = sum(quality_components) / len(quality_components) if quality_components else 75.0
+        
+        optimization_metrics = {
+            "total_power_consumption_kw": round(total_power_kw, 2),
+            "treatment_time_hours": round(treatment_time_hours, 2),
+            "power_cost_inr": round(power_cost_inr, 2),
+            "chemical_cost_inr": round(chemical_cost, 2),
+            "total_cost_INR": round(total_cost_inr, 2),
+            "final_quality_score": round(final_quality_score, 2),
+            "efficiency_percent": round(avg_efficiency, 2),
+            "water_processed_m3": round(flow_rate * treatment_time_hours, 2),
+            "cost_per_m3": round(total_cost_inr / max(1, flow_rate * treatment_time_hours), 4)
+        }
+        
+        # ============================================================
+        # MACHINE ANALYTICS (REAL-TIME)
+        # ============================================================
+        
+        machine_analytics = {
+            "total_machines": total_machines,
+            "running_machines": running_count,
+            "stopped_machines": stopped_count,
+            "maintenance_machines": maintenance_count,
+            "average_machine_efficiency": round(avg_efficiency, 2),
+            "machines_by_stage": {
+                stage: len(machine_list) for stage, machine_list in running_machines.items()
+            },
+            "total_installed_power_kw": sum(m.get('rated_power_kw', 0) for m in machines.values()),
+            "power_utilization_percent": round((total_power_kw / sum(m.get('rated_power_kw', 1) for m in machines.values())) * 100, 2) if machines else 0
+        }
+        
+        # ============================================================
+        # WATER QUALITY TRACKING
+        # ============================================================
+        
+        water_quality_tracking = {
+            "inlet": {
+                "pH": primary_ph,
+                "turbidity_ntu": primary_turbidity,
+                "temperature_c": primary_temp,
+                "tds_mg_l": primary_tds,
+                "dissolved_oxygen_mg_l": primary_do
+            },
+            "after_secondary": {
+                "pH": secondary_ph,
+                "turbidity_ntu": secondary_turbidity,
+                "dissolved_oxygen_mg_l": secondary_do
+            },
+            "after_tertiary": {
+                "turbidity_ntu": tertiary_turbidity,
+                "chlorine_mg_l": tertiary_chlorine
+            },
+            "outlet": {
+                "pH": final_ph,
+                "turbidity_ntu": final_turbidity,
+                "chlorine_mg_l": final_chlorine,
+                "quality_score": final_quality_score
+            }
+        }
+        
+        # ============================================================
+        # RECOMMENDATIONS BASED ON REAL DATA
+        # ============================================================
+        
+        recommendations = []
+        
+        # Check if critical machines are down
+        if machines.get('BAR_SCREEN_01', {}).get('status') == 'stopped':
+            recommendations.append("⚠️ Bar Screen is stopped - Start immediately to prevent debris buildup")
+        
+        if machines.get('AERATION_BLOWER_01', {}).get('status') == 'stopped' and \
+           machines.get('AERATION_BLOWER_02', {}).get('status') == 'stopped':
+            recommendations.append("🚨 All aeration blowers stopped - Secondary treatment compromised")
+        
+        # Tank level warnings
+        if tank1_level and tank1_level < 30:
+            recommendations.append(f"⚠️ Primary tank low ({tank1_level:.1f}%) - Increase flow")
+        if tank1_level and tank1_level > 90:
+            recommendations.append(f"⚠️ Primary tank high ({tank1_level:.1f}%) - Risk of overflow")
+        
+        # Water quality issues
+        if primary_turbidity and primary_turbidity > 100:
+            recommendations.append(f"🌊 High inlet turbidity ({primary_turbidity:.1f} NTU) - Increase coagulant dosing")
+        
+        if final_turbidity and final_turbidity > 5:
+            recommendations.append(f"⚠️ Final turbidity high ({final_turbidity:.1f} NTU) - Check filtration system")
+        
+        if final_ph and (final_ph < 6.5 or final_ph > 8.5):
+            recommendations.append(f"⚠️ Final pH out of range ({final_ph:.1f}) - Adjust pH correction")
+        
+        # Efficiency warnings
+        if avg_efficiency < 70:
+            recommendations.append(f"📉 Low system efficiency ({avg_efficiency:.1f}%) - Maintenance needed")
+        
+        # Power optimization
+        if total_power_kw > 200:
+            recommendations.append(f"⚡ High power consumption ({total_power_kw:.1f} kW) - Consider load balancing")
+        
+        # ============================================================
+        # RETURN COMPLETE REAL-TIME RESPONSE
+        # ============================================================
+        
+        return {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "data_source": "mqtt_realtime",
+            "mqtt_connected": mqtt_reader.running,
+            "equipment_control": equipment_control,
+            "optimization_metrics": optimization_metrics,
+            "machine_analytics": machine_analytics,
+            "water_quality_tracking": water_quality_tracking,
+            "plant_status": {
+                "flow_rate_m3_h": flow_rate,
+                "tank1_level_percent": tank1_level,
+                "tank2_level_percent": tank2_level,
+                "tank3_level_percent": tank3_level
+            },
+            "recommendations": recommendations,
+            "model_info": {
+                "model_type": "Real-time MQTT Data Processing",
+                "accuracy": "100% (Live Data)",
+                "last_update": datetime.now().isoformat()
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in real-time treatment process: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "data_source": "mqtt_realtime",
+            "mqtt_connected": mqtt_reader.running
         }
 
 
@@ -1686,101 +1998,42 @@ def equipment_failure_endpoint():
         }), 400
 
 
-@app.route('/api/treatment-process', methods=['GET', 'POST'])
+@app.route('/api/treatment-process', methods=['GET'])
 def treatment_process_endpoint():
     """
-    Treatment Process Controller Endpoint
-    - POST: Accepts JSON data manually
-    - GET: Uses real-time MQTT data from stages (primary/secondary/tertiary/final)
+    Treatment Process Controller Endpoint - REAL-TIME MQTT DATA ONLY
+    Uses live machine status and sensor data from MQTT
     """
     try:
-        if request.method == 'POST':
-            # Manual data from POST request
-            # force=True allows JSON parsing even if Content-Type is not set correctly
-            data = request.get_json(force=True) or {}
-
-            result = predict_treatment_process_json(
-                pH=data.get('pH', 7.0),
-                turbidity=data.get('turbidity', 45),
-                temperature=data.get('temperature', 28),
-                dissolved_oxygen=data.get('dissolved_oxygen', 5.5),
-                tds=data.get('tds', 420),
-                conductivity=data.get('conductivity', 600),
-                chlorine=data.get('chlorine', 0.8),
-                hardness=data.get('hardness', 180),
-                flow_rate=data.get('flow_rate', 1200),
-                tank1=data.get('tank1', 75),
-                tank2=data.get('tank2', 60),
-                tank3=data.get('tank3', 80),
-                hour=data.get('hour', 14),
-                prev_stage=data.get('prev_stage', 0),
-                source=data.get('source', 2)
+        # ✅ Use real-time MQTT data
+        result = predict_treatment_process_realtime()
+        
+        # Log the activity
+        if result.get('status') == 'success':
+            api_logger.log_treatment_process(
+                stage="all_stages",
+                data_source="mqtt_realtime",
+                inputs={
+                    "water_parameters": result.get('water_quality_tracking', {}).get('inlet', {}),
+                    "plant_status": result.get('plant_status', {})
+                },
+                equipment_control=result.get('equipment_control', {}),
+                optimization_metrics=result.get('optimization_metrics', {}),
+                machine_analytics=result.get('machine_analytics', {}),
+                model_type="Real-time MQTT Processing",
+                processing_time_ms=0
             )
-            result["data_source"] = "manual_input"
-
-        else:  # GET → use MQTT data
-            # Choose which stage to base control on, default "final"
-            stage = request.args.get('stage', 'final')
-
-            if stage not in ["primary", "secondary", "tertiary", "final"]:
-                return jsonify({
-                    "status": "error",
-                    "message": "Invalid stage. Use: primary, secondary, tertiary, final",
-                    "timestamp": datetime.now().isoformat()
-                }), 400
-
-            # Read sensor data for selected stage from MQTT cache
-            pH = mqtt_reader.get_sensor_value(stage, "ph")
-            turbidity = mqtt_reader.get_sensor_value(stage, "turbidity_ntu")
-            temperature = mqtt_reader.get_sensor_value(stage, "temperature_c")
-            dissolved_oxygen = mqtt_reader.get_sensor_value(stage, "dissolved_oxygen_mg_l")
-            tds = mqtt_reader.get_sensor_value(stage, "tds_mg_l")
-            conductivity = mqtt_reader.get_sensor_value(stage, "conductivity_µs_cm")
-            chlorine = mqtt_reader.get_sensor_value(stage, "total_chlorine_mg_l")
-            hardness = mqtt_reader.get_sensor_value(stage, "hardness_mg_l")
-            flow_rate = mqtt_reader.get_sensor_value(stage, "flow_rate_m3_h")
-            hour = mqtt_reader.get_sensor_value(stage, "hour_of_day_hr")
-            source = mqtt_reader.get_sensor_value(stage, "water_source_id")
-
-            # Tank levels from stages (for global plant context)
-            tank1 = mqtt_reader.get_sensor_value("primary", "tank_level_percent")
-            tank2 = mqtt_reader.get_sensor_value("secondary", "tank_level_percent")
-            tank3 = mqtt_reader.get_sensor_value("tertiary", "tank_level_percent")
-
-            # Map stage to prev_stage (0–3)
-            stage_map = {"primary": 0, "secondary": 1, "tertiary": 2, "final": 3}
-            prev_stage = max(0, stage_map.get(stage, 0) - 1)
-
-            result = predict_treatment_process_json(
-                pH=pH,
-                turbidity=turbidity,
-                temperature=temperature,
-                dissolved_oxygen=dissolved_oxygen,
-                tds=tds,
-                conductivity=conductivity,
-                chlorine=chlorine,
-                hardness=hardness,
-                flow_rate=flow_rate,
-                tank1=tank1,
-                tank2=tank2,
-                tank3=tank3,
-                hour=int(hour) if hour is not None else 14,
-                prev_stage=prev_stage,
-                source=int(source) if source is not None else 0
-            )
-
-            result["data_source"] = "mqtt_realtime"
-            result["stage"] = stage
-            result["mqtt_connected"] = mqtt_reader.running
-
+        
         return jsonify(result), 200
-
+        
     except Exception as e:
+        logger.error(f"Treatment process endpoint error: {e}")
         return jsonify({
             "status": "error",
             "message": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 400
+            "timestamp": datetime.now().isoformat(),
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 
@@ -1892,31 +2145,63 @@ def internal_error(error):
 # ============================================================
 
 import paho.mqtt.client as mqtt
+import json
 import threading
-import time
-
+from datetime import datetime
+import logging
 
 class MQTTSensorReader:
-    """Real-time MQTT sensor data reader with threading"""
+    """
+    Real-time MQTT sensor data reader with threading
+    Handles both sensor data and machine status/control
+    """
 
     def __init__(self):
+        # HiveMQ Cloud connection details
         self.mqtt_broker = "9b39969bf84848cca34a2913622c0a2c.s1.eu.hivemq.cloud"
         self.mqtt_port = 8883
         self.mqtt_username = "hydro"
         self.mqtt_password = "Hydroneil@123"
+        
         self.client = None
+        self.running = False
+        self.lock = threading.Lock()
+        
+        # Sensor data storage (by treatment stage)
         self.sensor_data = {
             "primary": {},
             "secondary": {},
             "tertiary": {},
             "final": {}
         }
+        
+        # Machine data storage
         self.machine_data = {
-            "summary": {},
-            "individual": {}
+            "summary": {},           # Aggregated summary from watertreatment/machines/summary
+            "individual": {}         # Individual machine data by machine_id
         }
-        self.running = False
-        self.lock = threading.Lock()
+        
+        # Machine IDs and their process stages
+        self.machine_stages = {
+            "BAR_SCREEN_01": "screening",
+            "GRIT_PUMP_01": "primary",
+            "GRIT_AERATOR_01": "primary",
+            "AERATION_BLOWER_01": "secondary",
+            "AERATION_BLOWER_02": "secondary",
+            "RAS_PUMP_01": "secondary",
+            "PSF_PUMP_01": "tertiary",
+            "ACF_PUMP_01": "tertiary",
+            "UF_PUMP_01": "tertiary",
+            "RO_HP_PUMP_01": "tertiary",
+            "UV_SYSTEM_01": "final",
+            "OZONE_GEN_01": "final",
+            "SLUDGE_PUMP_01": "sludge_treatment",
+            "THICKENER_RAKE_01": "sludge_treatment",
+            "SCREW_PRESS_01": "dewatering",
+            "BELT_PRESS_01": "dewatering"
+        }
+        
+        print("✅ MQTT Reader initialized")
 
     def connect(self):
         """Connect to HiveMQ broker"""
@@ -1925,103 +2210,310 @@ class MQTTSensorReader:
             self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
             self.client.on_connect = self.on_connect
             self.client.on_message = self.on_message
+            self.client.on_disconnect = self.on_disconnect
             self.client.tls_set()
+            
+            print(f"🔄 Connecting to MQTT broker: {self.mqtt_broker}:{self.mqtt_port}")
             self.client.connect(self.mqtt_broker, self.mqtt_port, keepalive=60)
             self.running = True
             self.client.loop_start()
+            
             print("✅ Connected to HiveMQ MQTT Broker")
             return True
+            
         except Exception as e:
             print(f"⚠️ MQTT Connection Error: {e}")
+            self.running = False
             return False
 
     def on_connect(self, client, userdata, flags, rc):
         """MQTT connection callback"""
         if rc == 0:
             print("🔗 MQTT Connected successfully")
-            # Subscribe to stage sensors
+            self.running = True
+            
+            # ============================================================
+            # Subscribe to STAGE SENSOR DATA
+            # ============================================================
             client.subscribe("watertreatment/primary/all", qos=1)
             client.subscribe("watertreatment/secondary/all", qos=1)
             client.subscribe("watertreatment/tertiary/all", qos=1)
             client.subscribe("watertreatment/final/all", qos=1)
+            print("📡 Subscribed to stage sensor topics")
             
-            # ✅ Subscribe to machine data
+            # ============================================================
+            # Subscribe to MACHINE DATA (16 machines)
+            # ============================================================
+            # Summary
             client.subscribe("watertreatment/machines/summary", qos=1)
-            client.subscribe("watertreatment/machines/+/+/status", qos=1)  # All individual machines
-            client.subscribe("watertreatment/quality/all", qos=1)
+            
+            # Individual machine status (all 16 machines)
+            client.subscribe("watertreatment/machines/+/+/status", qos=1)
+            print("📡 Subscribed to machine status topics")
+            
+            print("✅ All MQTT subscriptions active")
+            
         else:
             print(f"❌ Connection failed with code {rc}")
+            self.running = False
+
+    def on_disconnect(self, client, userdata, rc):
+        """MQTT disconnection callback"""
+        print(f"⚠️ Disconnected from MQTT broker (code: {rc})")
+        self.running = False
 
     def on_message(self, client, userdata, msg):
-        """MQTT message callback - extract sensor data"""
+        """MQTT message callback - process all incoming messages"""
         try:
+            topic = msg.topic
             payload = json.loads(msg.payload.decode())
+            
             with self.lock:
-                if "primary" in msg.topic and "/all" in msg.topic:
-                    self.sensor_data["primary"] = payload.get("sensors", {})
-                elif "secondary" in msg.topic and "/all" in msg.topic:
-                    self.sensor_data["secondary"] = payload.get("sensors", {})
-                elif "tertiary" in msg.topic and "/all" in msg.topic:
-                    self.sensor_data["tertiary"] = payload.get("sensors", {})
-                elif "final" in msg.topic and "/all" in msg.topic:
-                    self.sensor_data["final"] = payload.get("sensors", {})
+                # ============================================================
+                # STAGE SENSOR DATA
+                # ============================================================
+                if "/all" in topic:
+                    if "primary" in topic:
+                        self.sensor_data["primary"] = payload.get("sensors", {})
+                    elif "secondary" in topic:
+                        self.sensor_data["secondary"] = payload.get("sensors", {})
+                    elif "tertiary" in topic:
+                        self.sensor_data["tertiary"] = payload.get("sensors", {})
+                    elif "final" in topic:
+                        self.sensor_data["final"] = payload.get("sensors", {})
                 
-                # ✅ Handle machine data
-                elif "machines/summary" in msg.topic:
+                # ============================================================
+                # MACHINE SUMMARY DATA
+                # ============================================================
+                elif "machines/summary" in topic:
                     self.machine_data["summary"] = payload
                     
-                # ✅ Handle individual machine status
-                elif "/machines/" in msg.topic and "/status" in msg.topic:
-                    # Extract machine_id from topic: watertreatment/machines/aeration/AERATION_BLOWER_01/status
-                    parts = msg.topic.split('/')
+                    # Log to database if available
+                    if 'api_logger' in globals():
+                        try:
+                            api_logger.log_mqtt_message(
+                                topic=topic,
+                                message_type="machines_summary",
+                                stage="all",
+                                device_id="system",
+                                payload=payload,
+                                mqtt_connected=True
+                            )
+                        except Exception as log_error:
+                            logger.warning(f"Failed to log machines summary: {log_error}")
+                
+                # ============================================================
+                # INDIVIDUAL MACHINE STATUS
+                # ============================================================
+                elif "/machines/" in topic and "/status" in topic:
+                    # Extract machine_id from topic
+                    # Format: watertreatment/machines/{stage}/{machine_id}/status
+                    parts = topic.split('/')
                     if len(parts) >= 4:
-                        machine_id = parts[3]
+                        machine_id = parts[3]  # Extract machine_id
                         self.machine_data["individual"][machine_id] = payload
                         
+                        # Log to database if available
+                        if 'api_logger' in globals():
+                            try:
+                                api_logger.log_machine_status(payload)
+                                api_logger.log_mqtt_message(
+                                    topic=topic,
+                                    message_type="machine_status",
+                                    stage=payload.get("process_stage", "unknown"),
+                                    device_id=machine_id,
+                                    payload=payload,
+                                    mqtt_connected=True
+                                )
+                            except Exception as log_error:
+                                logger.warning(f"Failed to log machine status: {log_error}")
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON decode error on topic {msg.topic}: {e}")
         except Exception as e:
-            logger.error(f"Error processing MQTT message: {e}")
+            logger.error(f"❌ Error processing MQTT message: {e}")
 
+    # ============================================================
+    # SENSOR DATA GETTERS
+    # ============================================================
+    
     def get_sensor_value(self, stage, sensor_key):
         """Get sensor value from cache"""
         try:
             with self.lock:
                 sensor_obj = self.sensor_data.get(stage, {}).get(sensor_key, {})
-                return float(sensor_obj.get("value", 0))
-        except:
+                if isinstance(sensor_obj, dict):
+                    return float(sensor_obj.get("value", 0))
+                return float(sensor_obj) if sensor_obj else 0
+        except Exception as e:
+            logger.warning(f"Error getting sensor value {sensor_key} for {stage}: {e}")
             return 0
     
-    def get_machine_summary(self):
-        """Get machine summary data"""
+    def get_all_sensors(self, stage):
+        """Get all sensor data for a stage"""
         try:
             with self.lock:
-                return self.machine_data.get("summary", {})
+                return self.sensor_data.get(stage, {}).copy()
+        except:
+            return {}
+    
+    # ============================================================
+    # MACHINE DATA GETTERS
+    # ============================================================
+    
+    def get_machine_summary(self):
+        """Get machine summary data (aggregated from all 16 machines)"""
+        try:
+            with self.lock:
+                return self.machine_data.get("summary", {}).copy()
         except:
             return {}
     
     def get_machine_data(self, machine_id):
-        """Get individual machine data"""
+        """Get individual machine data by machine_id"""
         try:
             with self.lock:
-                return self.machine_data.get("individual", {}).get(machine_id, {})
+                return self.machine_data.get("individual", {}).get(machine_id, {}).copy()
         except:
             return {}
     
     def get_all_machines(self):
-        """Get all machine data"""
+        """Get all individual machine data"""
         try:
             with self.lock:
-                summary = self.machine_data.get("summary", {})
-                return summary.get("machines", [])
+                return self.machine_data.get("individual", {}).copy()
         except:
-            return []
-
+            return {}
+    
+    def get_machines_by_stage(self, stage):
+        """Get all machines for a specific process stage"""
+        try:
+            with self.lock:
+                machines = {}
+                for machine_id, data in self.machine_data.get("individual", {}).items():
+                    if self.machine_stages.get(machine_id) == stage:
+                        machines[machine_id] = data
+                return machines
+        except:
+            return {}
+    
+    def get_machine_sensor_value(self, machine_id, sensor_name):
+        """Get specific sensor value from a machine"""
+        try:
+            machine = self.get_machine_data(machine_id)
+            return machine.get(sensor_name)
+        except:
+            return None
+    
+    # ============================================================
+    # MACHINE CONTROL (PUBLISH COMMANDS)
+    # ============================================================
+    
+    def send_command(self, machine_id, command_data):
+        """
+        Send control command to a specific machine or broadcast to all
+        
+        Args:
+            machine_id: Machine ID (e.g., "BAR_SCREEN_01") or "all" for broadcast
+            command_data: Dict with command details
+                - action: "start", "stop", "set_speed", "set_mode", "maintenance", "auto_adjust"
+                - speed: (optional) Speed percentage for set_speed
+                - mode: (optional) "manual" or "auto" for set_mode
+                - reason: (optional) Reason for command
+        
+        Returns:
+            bool: True if command sent successfully, False otherwise
+        """
+        try:
+            # Validate machine_id
+            if machine_id != "all" and machine_id not in self.machine_stages:
+                logger.warning(f"Invalid machine_id: {machine_id}")
+                return False
+            
+            # Build topic
+            topic = f"watertreatment/control/{machine_id}"
+            
+            # Add timestamp to command
+            command_data['timestamp'] = datetime.now().isoformat()
+            
+            # Publish command
+            result = self.client.publish(topic, json.dumps(command_data), qos=1)
+            
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                print(f"✅ Command sent to {machine_id}: {command_data['action']}")
+                
+                # Log command if logger available
+                if 'api_logger' in globals():
+                    try:
+                        api_logger.log_system_event(
+                            event_type="MACHINE_COMMAND_SENT",
+                            severity="INFO",
+                            category="CONTROL",
+                            message=f"Command sent to {machine_id}",
+                            details={
+                                "machine_id": machine_id,
+                                "command": command_data,
+                                "topic": topic
+                            }
+                        )
+                    except Exception as log_error:
+                        logger.warning(f"Failed to log command: {log_error}")
+                
+                return True
+            else:
+                print(f"❌ Failed to send command to {machine_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending command: {e}")
+            return False
+    
+    # ============================================================
+    # CONNECTION MANAGEMENT
+    # ============================================================
+    
     def disconnect(self):
         """Disconnect from MQTT broker"""
-        if self.client:
-            self.running = False
-            self.client.loop_stop()
-            self.client.disconnect()
-            print("❌ Disconnected from MQTT")
+        try:
+            if self.client:
+                self.running = False
+                self.client.loop_stop()
+                self.client.disconnect()
+                print("✅ Disconnected from MQTT broker")
+        except Exception as e:
+            logger.error(f"Error disconnecting: {e}")
+    
+    def is_connected(self):
+        """Check if MQTT client is connected"""
+        return self.running and self.client and self.client.is_connected()
+    
+    def get_connection_status(self):
+        """Get detailed connection status"""
+        return {
+            "connected": self.is_connected(),
+            "broker": self.mqtt_broker,
+            "port": self.mqtt_port,
+            "username": self.mqtt_username,
+            "total_machines": len(self.machine_data.get("individual", {})),
+            "sensor_stages": list(self.sensor_data.keys()),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+# ============================================================
+# Initialize MQTT Reader
+# ============================================================
+mqtt_reader = MQTTSensorReader()
+
+# Try to connect
+try:
+    if mqtt_reader.connect():
+        print("✅ MQTT Reader connected and running")
+    else:
+        print("⚠️ MQTT Reader failed to connect - using demo data")
+except Exception as e:
+    print(f"⚠️ MQTT initialization error: {e}")
+
 
 
 mqtt_reader = MQTTSensorReader()
@@ -2599,6 +3091,390 @@ def all_stages_report():
         }), 500
 
 
+#========================================================
+#Machines sxdnsjxnjm
+#=========================
+
+# ============================================================
+# MACHINE STATUS & CONTROL ENDPOINTS
+# ============================================================
+
+@app.route('/api/machines', methods=['GET'])
+def get_all_machines():
+    """Get status of all 16 machines"""
+    start_time = time.time()
+    
+    try:
+        machines = mqtt_reader.get_all_machines()
+        summary = mqtt_reader.get_machines_summary()
+        
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "mqtt_connected": mqtt_reader.running,
+            "total_machines": len(machines),
+            "summary": summary,
+            "machines": machines
+        }
+        
+        response = convert_to_native_type(response)
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log request
+        api_logger.log_api_request(
+            endpoint='/api/machines',
+            method='GET',
+            status_code=200,
+            response_time_ms=processing_time_ms,
+            client_ip=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+            request_headers=dict(request.headers),
+            request_args=dict(request.args),
+            request_json=None,
+            response_json={"total_machines": len(machines)}
+        )
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/machines/<machine_id>', methods=['GET'])
+def get_machine_status(machine_id):
+    """Get status of specific machine"""
+    start_time = time.time()
+    
+    try:
+        machine_data = mqtt_reader.get_machine_data(machine_id)
+        
+        if not machine_data:
+            return jsonify({
+                "status": "error",
+                "message": f"Machine {machine_id} not found",
+                "available_machines": list(mqtt_reader.machines.keys())
+            }), 404
+        
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "mqtt_connected": mqtt_reader.running,
+            "machine": machine_data
+        }
+        
+        response = convert_to_native_type(response)
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log machine status
+        api_logger.log_machine_status(machine_data)
+        
+        # Log request
+        api_logger.log_api_request(
+            endpoint=f'/api/machines/{machine_id}',
+            method='GET',
+            status_code=200,
+            response_time_ms=processing_time_ms,
+            client_ip=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+            request_headers=dict(request.headers),
+            request_args=dict(request.args),
+            request_json=None,
+            response_json=response
+        )
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/machines/stage/<stage>', methods=['GET'])
+def get_machines_by_stage(stage):
+    """Get all machines for a specific process stage"""
+    start_time = time.time()
+    
+    try:
+        valid_stages = ["screening", "primary", "secondary", "tertiary", "final", "sludge_treatment", "dewatering"]
+        
+        if stage not in valid_stages:
+            return jsonify({
+                "status": "error",
+                "message": f"Invalid stage. Valid stages: {', '.join(valid_stages)}"
+            }), 400
+        
+        machines = mqtt_reader.get_machines_by_stage(stage)
+        
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "mqtt_connected": mqtt_reader.running,
+            "stage": stage,
+            "machine_count": len(machines),
+            "machines": machines
+        }
+        
+        response = convert_to_native_type(response)
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log request
+        api_logger.log_api_request(
+            endpoint=f'/api/machines/stage/{stage}',
+            method='GET',
+            status_code=200,
+            response_time_ms=processing_time_ms,
+            client_ip=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+            request_headers=dict(request.headers),
+            request_args=dict(request.args),
+            request_json=None,
+            response_json={"stage": stage, "machine_count": len(machines)}
+        )
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/machines/summary', methods=['GET'])
+def get_machines_summary():
+    """Get aggregated summary of all machines"""
+    start_time = time.time()
+    
+    try:
+        summary = mqtt_reader.get_machines_summary()
+        
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "mqtt_connected": mqtt_reader.running,
+            "summary": summary
+        }
+        
+        response = convert_to_native_type(response)
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log request
+        api_logger.log_api_request(
+            endpoint='/api/machines/summary',
+            method='GET',
+            status_code=200,
+            response_time_ms=processing_time_ms,
+            client_ip=request.remote_addr,
+            user_agent=request.headers.get('User-Agent'),
+            request_headers=dict(request.headers),
+            request_args=dict(request.args),
+            request_json=None,
+            response_json=response
+        )
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# MACHINE CONTROL ENDPOINTS
+# ============================================================
+
+@app.route('/api/control/<machine_id>/start', methods=['POST'])
+def start_machine(machine_id):
+    """Start a machine"""
+    start_time = time.time()
+    
+    try:
+        command = {
+            "action": "start"
+        }
+        
+        success = mqtt_reader.send_command(machine_id, command)
+        
+        response = {
+            "status": "success" if success else "error",
+            "machine_id": machine_id,
+            "command": "start",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log command
+        api_logger.log_system_event(
+            event_type="MACHINE_START_COMMAND",
+            severity="INFO",
+            category="CONTROL",
+            message=f"START command sent to {machine_id}",
+            details={"machine_id": machine_id, "command": command}
+        )
+        
+        return jsonify(response), 200 if success else 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/<machine_id>/stop', methods=['POST'])
+def stop_machine(machine_id):
+    """Stop a machine"""
+    start_time = time.time()
+    
+    try:
+        command = {
+            "action": "stop"
+        }
+        
+        success = mqtt_reader.send_command(machine_id, command)
+        
+        response = {
+            "status": "success" if success else "error",
+            "machine_id": machine_id,
+            "command": "stop",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log command
+        api_logger.log_system_event(
+            event_type="MACHINE_STOP_COMMAND",
+            severity="WARNING",
+            category="CONTROL",
+            message=f"STOP command sent to {machine_id}",
+            details={"machine_id": machine_id, "command": command}
+        )
+        
+        return jsonify(response), 200 if success else 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/<machine_id>/speed', methods=['POST'])
+def set_machine_speed(machine_id):
+    """Set machine speed (manual control)"""
+    start_time = time.time()
+    
+    try:
+        data = request.get_json() or {}
+        speed = data.get('speed')
+        reason = data.get('reason', 'Manual speed adjustment')
+        
+        if speed is None:
+            return jsonify({"error": "Speed parameter required"}), 400
+        
+        command = {
+            "action": "set_speed",
+            "speed": float(speed),
+            "reason": reason
+        }
+        
+        success = mqtt_reader.send_command(machine_id, command)
+        
+        response = {
+            "status": "success" if success else "error",
+            "machine_id": machine_id,
+            "command": "set_speed",
+            "speed": speed,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Log command
+        api_logger.log_system_event(
+            event_type="MACHINE_SPEED_CHANGE",
+            severity="INFO",
+            category="CONTROL",
+            message=f"Speed changed for {machine_id} to {speed}%",
+            details={"machine_id": machine_id, "speed": speed, "reason": reason}
+        )
+        
+        return jsonify(response), 200 if success else 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/<machine_id>/mode', methods=['POST'])
+def set_machine_mode(machine_id):
+    """Set machine control mode (manual/auto)"""
+    start_time = time.time()
+    
+    try:
+        data = request.get_json() or {}
+        mode = data.get('mode')
+        
+        if mode not in ['manual', 'auto']:
+            return jsonify({"error": "Mode must be 'manual' or 'auto'"}), 400
+        
+        command = {
+            "action": "set_mode",
+            "mode": mode
+        }
+        
+        success = mqtt_reader.send_command(machine_id, command)
+        
+        response = {
+            "status": "success" if success else "error",
+            "machine_id": machine_id,
+            "command": "set_mode",
+            "mode": mode,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Log command
+        api_logger.log_system_event(
+            event_type="MACHINE_MODE_CHANGE",
+            severity="INFO",
+            category="CONTROL",
+            message=f"Control mode changed for {machine_id} to {mode}",
+            details={"machine_id": machine_id, "mode": mode}
+        )
+        
+        return jsonify(response), 200 if success else 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/all/<action>', methods=['POST'])
+def broadcast_command(action):
+    """Broadcast command to all machines"""
+    start_time = time.time()
+    
+    try:
+        valid_actions = ['start', 'stop']
+        
+        if action not in valid_actions:
+            return jsonify({"error": f"Invalid action. Use: {', '.join(valid_actions)}"}), 400
+        
+        command = {
+            "action": action
+        }
+        
+        success = mqtt_reader.send_command('all', command)
+        
+        response = {
+            "status": "success" if success else "error",
+            "command": f"broadcast_{action}",
+            "target": "all_machines",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Log broadcast command
+        api_logger.log_system_event(
+            event_type="BROADCAST_COMMAND",
+            severity="CRITICAL",
+            category="CONTROL",
+            message=f"Broadcast {action.upper()} command sent to all machines",
+            details={"action": action, "target": "all_machines"}
+        )
+        
+        return jsonify(response), 200 if success else 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================
 # COMPREHENSIVE LOG ACCESS ENDPOINTS
 # ============================================================
@@ -2932,7 +3808,6 @@ def export_table_to_csv(table):
             "message": str(e),
             "timestamp": datetime.now().isoformat()
         }), 400
-
 
 # ============================================================
 # MAIN SERVER START
