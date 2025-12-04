@@ -17,11 +17,13 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libgl1 \
     libx11-6 \
-    libatlas-dev \
+    libblas-dev \
+    liblapack-dev \
     libhdf5-dev \
     wget \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
 
 # -------------------------
 # WORKDIR
