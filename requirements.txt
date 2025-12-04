@@ -12,6 +12,7 @@ pandas==2.2.2
 scikit-learn==1.4.2
 xgboost==2.0.3
 
-tensorflow==2.15.0
+# TensorFlow CPU version (safe for Render)
+tensorflow-cpu==2.15.0
 
 protobuf==4.25.3
