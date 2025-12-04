@@ -19,3 +19,4 @@ tensorflow-cpu==2.17.0
 
 # Utility
 protobuf==4.25.3
+paho-mqtt==1.6.1
