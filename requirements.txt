@@ -7,11 +7,12 @@ gunicorn==21.2.0
 gradio==4.44.0
 
 # Scientific & ML Stack (Python 3.12 Compatible)
-numpy==2.1.3
+numpy==1.26.4
 pandas==2.2.3
 scikit-learn==1.5.2
 xgboost==2.1.1
 joblib==1.4.2
+scipy==1.12.0   # optional explicit pin for stability
 
 # TensorFlow CPU (Python 3.12 Compatible)
 tensorflow-cpu==2.17.0

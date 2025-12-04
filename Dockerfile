@@ -24,7 +24,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-
 # -------------------------
 # WORKDIR
 # -------------------------
@@ -36,14 +35,15 @@ WORKDIR /app
 COPY . /app
 
 # -------------------------
-# UPGRADE PIP
+# UPGRADE PIP & ENSURE WHEEL SUPPORT
 # -------------------------
-RUN pip install --upgrade pip
+RUN pip install --upgrade pip setuptools wheel
 
 # -------------------------
 # INSTALL PYTHON DEPENDENCIES
 # -------------------------
-RUN pip install --no-cache-dir -r requirements.txt
+# Prefer binary wheels to avoid heavy source builds
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # -------------------------
 # EXPOSE PORT
