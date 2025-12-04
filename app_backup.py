@@ -21,7 +21,44 @@ from threading import Lock
 import time
 import traceback
 from flask_cors import CORS 
+import os
+import sys
+import traceback
 
+def analyze_startup_logs():
+    print("========== RENDER STARTUP LOG ANALYZER ==========")
+
+    # Python version check
+    print(f"Python Version: {sys.version}")
+
+    # Check required ML files
+    required_files = [
+        "water_quality_model.pkl",
+        "scaler.pkl",
+        "chemical_dosing_models.pkl",
+        "dosing_scaler.pkl",
+        "equipment_failure_lstm.h5",
+        "treatment_process_controller.h5",
+        "tpc_input_scaler.pkl",
+        "tpc_output_scaler.pkl",
+        "tpc_metadata.json"
+    ]
+
+    print("\nChecking ML model files:")
+    for f in required_files:
+        print(f" - {f}: {'FOUND ✅' if os.path.exists(f) else 'MISSING ❌'}")
+
+    print("\nEnvironment Variables:")
+    print({k: v for k, v in os.environ.items() if k.startswith("PY") or "FLASK" in k})
+
+    print("==================================================\n")
+
+
+try:
+    analyze_startup_logs()
+except Exception:
+    print("Startup Analyzer Error:")
+    print(traceback.format_exc())
 # ============================================================
 # COMPREHENSIVE SQLite LOGGING SYSTEM - EVERY ACTIVITY
 # ============================================================

@@ -4,8 +4,14 @@ services:
     env: python
     region: singapore
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app_backup:app --timeout 300 --workers 2 --threads 2
+
     envVars:
-      FLASK_ENV: production
       PYTHON_VERSION: 3.10
+      FLASK_ENV: production
+
+    buildCommand: |
+      pip install --upgrade pip
+      pip install numpy==1.26.4 pandas==2.2.2 --only-binary=:all:
+      pip install -r requirements.txt
+
+    startCommand: gunicorn app_backup:app --workers 2 --threads 2 --timeout 300
