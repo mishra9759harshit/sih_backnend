@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hydronail-ml-api
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app_backup:app --timeout 300 --workers 2 --threads 2
+    envVars:
+      FLASK_ENV: production
+      PYTHON_VERSION: 3.10
